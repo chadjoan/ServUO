@@ -12,7 +12,9 @@ using Server.Targeting;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Text;
 #endregion
 
 namespace Server.Mobiles
@@ -40,6 +42,17 @@ namespace Server.Mobiles
         static BaseVendor()
         {
             AllVendors = new List<BaseVendor>(0x4000);
+        }
+
+        private   VendorLedger m_Ledger = null; // Requires 'this', so must be initialized in constructor.
+        protected VendorLedger Ledger
+        {
+            get
+            {
+                if ( this.m_Ledger == null )
+                    this.m_Ledger = new VendorLedger(this);
+                return this.m_Ledger;
+            }
         }
 
         protected abstract List<SBInfo> SBInfos { get; }
@@ -317,6 +330,8 @@ namespace Server.Mobiles
             BribeMultiplier = Utility.Random(10);
 
             m_LastRestock = DateTime.UtcNow;
+
+            m_Ledger = new VendorLedger(this);
         }
 
         public BaseVendor(Serial serial)
@@ -1118,7 +1133,13 @@ namespace Server.Mobiles
 
                         if (item.IsStandardLoot() && item.Movable && ssi.IsSellable(item))
                         {
-                            table[item] = new SellItemState(item, ssi.GetSellPriceFor(item, this), ssi.GetNameFor(item));
+                            DateTime transactionTime = DateTime.UtcNow;
+                            int priceEach = ssi.GetSellPriceFor(item, this);
+                            int maxSaleGold = ssi.MaxPayForItem(transactionTime, item, this);
+                            if ( priceEach > maxSaleGold )
+                                continue; // Vendor can't afford ANY of this item. So don't offer to buy it.
+
+                            table[item] = new SellItemState(item, priceEach, ssi.GetNameFor(item));
                         }
                     }
                 }
@@ -1615,6 +1636,7 @@ namespace Server.Mobiles
             bool fromBank = false;
             bool fullPurchase = true;
             int controlSlots = buyer.FollowersMax - buyer.Followers;
+            DateTime transactionTime = DateTime.UtcNow;
 
             foreach (BuyItemResponse buy in list)
             {
@@ -1790,6 +1812,13 @@ namespace Server.Mobiles
 
                 return false;
             }
+
+            // Add money to the Vendor's account.
+            // If there is a maximum on the amount of cash-on-hand they can
+            // hold, then the ledger's transaction logic will handle that.
+            if (bought && totalCost != 0)
+                this.Ledger.AddTransaction(
+                    transactionTime, (int)Math.Round(totalCost), buyer);
 
             buyer.PlaySound(0x32);
 
@@ -2063,6 +2092,57 @@ namespace Server.Mobiles
             return true;
         }
 
+        [CommandProperty(AccessLevel.GameMaster)]
+        public bool DumpLedger
+        {
+            get { return false; }
+            set
+            {
+                if (value)
+                {
+                    List<BookPageInfo> pages =
+                        this.Ledger.ToBookPages();
+
+                    BaseBook theLedger;
+                    var rng = new Random();
+                    var pageCount = pages.Count;
+                    var writable = true;
+                    switch(rng.Next(0,4))
+                    {
+                        case 0: theLedger = new TanBook(pageCount, writable);   break;
+                        case 1: theLedger = new RedBook(pageCount, writable);   break;
+                        case 2: theLedger = new BlueBook(pageCount, writable);  break;
+                        case 3: theLedger = new BrownBook(pageCount, writable); break;
+                        default: return;
+                    }
+                    theLedger.Title  = "Cash Account Ledger";
+                    theLedger.Author = this.Name;
+                    for ( int i = 0; i < pageCount; i++ )
+                        theLedger.Pages[i] = pages[i];
+
+                    var tmpItem = this.Holding;
+                    this.Holding = theLedger;
+                    this.Drop(this.Location);
+                    this.Holding = tmpItem;
+                    Say("I have written my ledger into a book and placed it on the floor.");
+                }
+            }
+        }
+
+        /*
+        private static int GetLineNumber(
+            [CallerLineNumber] int lineNumber = 0)
+        {
+            return lineNumber;
+        }
+        */
+        
+        private static int GetLineNumber()
+        {
+            StackFrame callStack = new StackFrame(1, true);
+            return callStack.GetFileLineNumber();
+        }
+
         public virtual bool OnSellItems(Mobile seller, List<SellItemResponse> list)
         {
             if (!IsActiveBuyer)
@@ -2082,6 +2162,12 @@ namespace Server.Mobiles
             }
 
             seller.PlaySound(0x32);
+
+            LedgerEntry ledgerEntry;
+            ledgerEntry.TransactionTime = DateTime.UtcNow;
+            ledgerEntry.TransactionAmount = 0;
+            ledgerEntry.OtherParty = seller;
+            ledgerEntry.RunningBalance = 0;
 
             IShopSellInfo[] info = GetSellInfo();
             IBuyItemInfo[] buyInfo = GetBuyInfo();
@@ -2117,6 +2203,12 @@ namespace Server.Mobiles
                 return true;
             }
 
+            bool tooMuchOfSomething = false;
+            bool ranOutOfCash = false;
+            int  numberOfSales = 0;
+            int  cashOnHand =
+                this.Ledger.GetCashOnHand(ledgerEntry.TransactionTime);
+
             foreach (SellItemResponse resp in list)
             {
                 if (resp.Item.RootParent != seller || resp.Amount <= 0 || !resp.Item.IsStandardLoot() || !resp.Item.Movable ||
@@ -2127,58 +2219,31 @@ namespace Server.Mobiles
 
                 foreach (IShopSellInfo ssi in info)
                 {
-                    if (ssi.IsSellable(resp.Item))
+                    if (!ssi.IsSellable(resp.Item))
+                        continue;
+
+                    int amount = resp.Amount;
+
+                    int singlePrice = ssi.GetSellPriceFor(resp.Item, this);
+                    int stackPrice = singlePrice * amount;
+
+                    // This would cause div-by-zero.
+                    // And since we don't want to sell something for nothing,
+                    // we skip these.
+                    if ( singlePrice == 0 )
+                        continue;
+
+                    if (amount > resp.Item.Amount)
                     {
-                        int amount = resp.Amount;
+                        amount = resp.Item.Amount;
+                    }
 
-                        if (amount > resp.Item.Amount)
-                        {
-                            amount = resp.Item.Amount;
-                        }
+                    if (!ssi.IsResellable(resp.Item))
+                    {
+                        resp.Item.Delete();
 
-                        if (ssi.IsResellable(resp.Item))
-                        {
-                            bool found = false;
-
-                            foreach (IBuyItemInfo bii in buyInfo)
-                            {
-                                if (bii.Restock(resp.Item, amount))
-                                {
-                                    bii.OnSold(this, amount);
-
-                                    resp.Item.Consume(amount);
-                                    found = true;
-
-                                    break;
-                                }
-                            }
-
-                            if (!found)
-                            {
-                                cont = BuyPack;
-
-                                if (amount < resp.Item.Amount)
-                                {
-                                    Item item = LiftItemDupe(resp.Item, resp.Item.Amount - amount);
-
-                                    if (item != null)
-                                    {
-                                        item.SetLastMoved();
-                                        cont.DropItem(item);
-                                    }
-                                    else
-                                    {
-                                        resp.Item.SetLastMoved();
-                                        cont.DropItem(resp.Item);
-                                    }
-                                }
-                                else
-                                {
-                                    resp.Item.SetLastMoved();
-                                    cont.DropItem(resp.Item);
-                                }
-                            }
-                        }
+                        // The amount < resp.Item.Amount never seems to be executed.
+                        /*
                         else
                         {
                             if (amount < resp.Item.Amount)
@@ -2189,17 +2254,161 @@ namespace Server.Mobiles
                             {
                                 resp.Item.Delete();
                             }
+                        }*/
+                        // Essentially an Assertion, but we don't want to crash a server for it.
+                        if ( amount < resp.Item.Amount )
+                            Console.WriteLine("Warning: Thought this code was unreachable, but it was reached. --Chad "
+                                +"(in Scripts/Mobiles/NPCs/BaseVendor.cs)");
+                    }
+                    else
+                    {
+                        // In the first part of this block, the vendor will
+                        // determine if it can afford and if it wants to
+                        // buy this item (or maybe just part of a stack).
+                        int basePrice = ssi.GetBaseSellPriceFor(resp.Item);
+                        int fullPrice = singlePrice;
+                        
+                        bool itemWorthGoingIntoDebt =
+                            GenericSellInfo.IsItemWorthGoingIntoDebt(
+                                resp.Item, basePrice, fullPrice);
+
+                        DateTime transTime = ledgerEntry.TransactionTime;
+                        int maxSaleGold =
+                            ssi.MaxPayForItem(
+                                transTime, resp.Item, itemWorthGoingIntoDebt);
+
+                        // Reduce stack count until vendor is willing
+                        // to buy the quantity offered.
+                        if ( stackPrice > maxSaleGold )
+                        {
+                            amount = maxSaleGold / singlePrice;
+                            stackPrice = singlePrice * amount;
+                            resp.Item.Amount = amount;
+                            tooMuchOfSomething = true;
+                            if ( amount == 0 )
+                                continue;
                         }
 
-                        int singlePrice = ssi.GetSellPriceFor(resp.Item, this);
-                        GiveGold += singlePrice * amount;
+                        if ( amount <= 1 )
+                        {
+                            // Reject individual items if vendor can't afford them.
+                            if ( singlePrice > cashOnHand )
+                            {
+                                if ( !itemWorthGoingIntoDebt )
+                                {
+                                    ranOutOfCash = true;
+                                    continue;
+                                }
 
-                        EventSink.InvokeValidVendorSell(new ValidVendorSellEventArgs(seller, this, resp.Item, singlePrice));
+                                // We can go into debt if we have 10% of the item's value in cash.
+                                if ( singlePrice/10 > cashOnHand )
+                                {
+                                    ranOutOfCash = true;
+                                    continue;
+                                }
 
-                        break;
+                                // Sold!
+                            }
+                        }
+                        else // amount > 1
+                        {
+                            // Reduce stack count until vendor can afford it.
+                            if ( stackPrice > cashOnHand )
+                            {
+                                amount = cashOnHand / singlePrice;
+                                stackPrice = singlePrice * amount;
+                                resp.Item.Amount = amount;
+                                ranOutOfCash = true;
+                                if ( amount == 0 )
+                                    continue;
+                            }
+                        }
+
+                        // Commit this line-item to the sale.
+                        numberOfSales++;
+                        ssi.OnSold(
+                            ledgerEntry.TransactionTime,
+                            resp.Item.GetType(),
+                            amount,
+                            stackPrice);
+
+                        ledgerEntry.TransactionAmount -= stackPrice;
+                        cashOnHand -= stackPrice;
+
+                        // Past this point it's all about determining
+                        // whether the item(s) *poof* or transfer to
+                        // the vendor's stock.
+
+                        bool found = false;
+
+                        foreach (IBuyItemInfo bii in buyInfo)
+                        {
+                            if (!bii.Restock(resp.Item, amount))
+                                continue;
+
+                            bii.OnSold(this, amount);
+
+                            resp.Item.Consume(amount);
+                            found = true;
+
+                            break;
+                        }
+
+                        if (!found)
+                        {
+                            cont = BuyPack;
+
+                            if (amount < resp.Item.Amount)
+                            {
+                                Item item = LiftItemDupe(resp.Item, resp.Item.Amount - amount);
+
+                                if (item != null)
+                                {
+                                    item.SetLastMoved();
+                                    cont.DropItem(item);
+                                }
+                                else
+                                {
+                                    resp.Item.SetLastMoved();
+                                    cont.DropItem(resp.Item);
+                                }
+                            }
+                            else
+                            {
+                                resp.Item.SetLastMoved();
+                                cont.DropItem(resp.Item);
+                            }
+                        }
                     }
+
+                    GiveGold += stackPrice;
+
+                    EventSink.InvokeValidVendorSell(new ValidVendorSellEventArgs(seller, this, resp.Item, singlePrice));
+
+                    break;
                 }
             }
+
+            if ( ranOutOfCash )
+            {
+                if ( numberOfSales > 0 )
+                    SayTo(seller, "I couldn't afford all of that, so I just bought some of it.");
+                else
+                    SayTo(seller, "I can't afford any of that.");
+            }
+            else
+            if ( tooMuchOfSomething )
+                SayTo(seller, "I couldn't buy all of that; I have enough now.");
+
+            if ( ledgerEntry.TransactionAmount != 0 )
+                this.Ledger.AddTransaction(ledgerEntry);
+
+            /*
+            if ( seller.AccessLevel == AccessLevel.GameMaster
+            ||   seller.AccessLevel == AccessLevel.Administrator )
+                SayTo(seller, "My cash on hand is now {0}",
+                    this.Ledger.GetCashOnHand(ledgerEntry.TransactionTime));
+            */
 
             if (GiveGold > 0)
             {
@@ -2237,8 +2446,18 @@ namespace Server.Mobiles
         {
             base.Serialize(writer);
 
-            writer.Write(3); // version
+            // Dawdy World customization:
+            // We'll just count in thousands; each thousand-version will have
+            // a corresponding upstream (official) version that will correspond,
+            // which will be in the less significant digits (so the official
+            // releases could get up to version 999 before we have a collision).
+            writer.Write(1003); // version
 
+            // Version 1003  (Viking 1000 + ServUO 3)
+            this.Ledger.Serialize(writer);
+
+            // Version 3
+            // Version 2
             writer.Write(BribeMultiplier);
             writer.Write(NextMultiplierDecay);
             writer.Write(RecentBribes);
@@ -2317,6 +2536,10 @@ namespace Server.Mobiles
 
             switch (version)
             {
+                case 1003: // Viking 1000 + ServUO 3
+                    this.Ledger.Deserialize(reader, this);
+                    goto case 3; // Version 1003 is based on version 3.
+
                 case 3:
                 case 2:
                     BribeMultiplier = reader.ReadInt();
@@ -2695,6 +2918,1477 @@ namespace Server.ContextMenus
             }
         }
     }
+
+    public struct LedgerEntry
+    {
+        public  DateTime  TransactionTime;
+        public  int       TransactionAmount;
+        public  Mobile    OtherParty;
+        public  int       RunningBalance;
+
+        public string ToString()
+        {
+            return String.Format(
+                "{{TransactionTime: {0:yyyy-MM-dd.HH:mm:ss}, TransactionAmount: {1}, OtherParty: {2}, RunningBalance: {3}}}",
+                TransactionTime, TransactionAmount, OtherParty, RunningBalance);
+        }
+    }
+
+    public sealed class VendorLedger
+    {
+        BaseVendor parent;
+
+        // Cash-on-hand parameters. All cash is measured in gold coins.
+        public static int TargetCashOnHandLow   = Config.Get("Vendors.TargetCashOnHandLow", 8000);
+        public static int TargetCashOnHandHigh  = Config.Get("Vendors.TargetCashOnHandHigh", 24000);
+        
+        public static int MaxDailyCashInflow    = Config.Get("Vendors.MaxDailyCashInflow", 4800);
+        public static int MaxDailyCashOutflow   = Config.Get("Vendors.MaxDailyCashOutflow", 2400);
+        
+        public static int HoursSpreadOnCashDays = Config.Get("Vendors.HoursSpreadOnCashDays", 2);
+        
+        public static int MaxCashOnHandLow      = Config.Get("Vendors.MaxCashOnHandLow", 40000);
+        public static int MaxCashOnHandHigh     = Config.Get("Vendors.MaxCashOnHandHigh", 60000);
+        
+        public static int MinDaysBeforeMaxCashReset = Config.Get("Vendors.MinDaysBeforeMaxCashReset", 7);
+        public static int MaxDaysBeforeMaxCashReset = Config.Get("Vendors.MaxDaysBeforeMaxCashReset", 14);
+
+        public const  int NumDaysCashSimBeforeDormancy = 3;
+        public const  int NumSimulatedCashTransacts = 7;
+        
+        // Useful for avoiding this calculation during construction/deserialization
+        // of instances that don't already have it.
+        private static  DateTime  serverStartTime = DateTime.UtcNow;
+
+        // Cash-on-hand working values.
+        
+        // The transactions that this vendor has made. This includes all
+        // buys/sells with players, as well as simulated "transactions" that
+        // keep the vendor's assets from deflating too hard or inflating
+        // without bound.
+        private List<LedgerEntry>   m_Ledger = new List<LedgerEntry>();
+
+        // This is the vendor's cash-on-hand before the first ledger entry.
+        private int                 m_StartingBalance = 0;
+
+        // The maximum amount of cash a vendor can have, even if they sell
+        // a lot of stuff to players.
+        private int                 m_CurrentMaxCash = MaxCashOnHandLow;
+
+        // The maximum amount of cash a vendor can have is randomized.
+        // But it changes occasionally to prevent the world from being
+        // too predictable.
+        // This variable encodes when we will change it again.
+        private DateTime            m_NextMaxCashReset;
+
+        // The current cash-flow simulation.
+        // This might contain transactions that have yet to play out,
+        // or it could be far in the past, in which case we might
+        // need to finish it and run more simulations to catch the
+        // vendor up to present-day-present-time.
+        private CashFlowSimulation  m_CashFlowSim = null;
+
+        public VendorLedger(BaseVendor parent)
+        {
+            this.parent = parent;
+
+            // Ensure that this contains a valid value.
+            // Try to do it without calling DateTime.UtcNow (or any other
+            // manner of peeking at the clock) for every instance because
+            // that operation might be very expensive and we might be
+            // deserializing thousands of these things on server startup.
+            m_NextMaxCashReset = serverStartTime;
+        }
+
+        public int GetCashOnHand(DateTime when, bool simulationNeeded = true)
+        {
+            // Check for vendors that aren't in the economy yet. Fix that.
+            // This must be done even if simulationNeeded == false, because
+            // later code must assume that there is a non-null m_CashFlowSim
+            // object attached to this vendor.
+            if ( m_CashFlowSim == null )
+                this.InitializeCashSimulations(when);
+            else // Vendor is already in the economy.
+            {
+                if ( simulationNeeded )
+                    this.UpdateCashSimulation(when);
+            }
+
+            if ( m_Ledger.Count > 0 )
+            {
+                // Use ReverseFindEntryBeforeTime to wind back time until
+                // the next ledger entry that's before 'when'.
+                // This is more appropriate than forward-find because
+                // this method is more likely to be called 
+                int ledgerIdx = ReverseFindEntryBeforeTime(m_Ledger, when);
+                if ( ledgerIdx >= 0 )
+                    return m_Ledger[ledgerIdx].RunningBalance;
+                else
+                    return m_StartingBalance; // 'when' is sometime before the start of the ledger.
+            }
+            else
+            {
+                // Normally the cash simulation will create ledger entries
+                // and the other branch will be taken.
+                // It is possible, however, that this vendor just started
+                // simulating, and its first daily simulation was randomly
+                // placed very close to DateTime.UtcNow. Then, its simulation
+                // randomly placed all transactions somewhere at least
+                // several hours in advance of the simulation start datetime,
+                // and thus in the future of DateTime.UtcNow. If all of the
+                // simulated transactions are in the future, and the vendor
+                // hasn't recorded any player transactions in its ledger
+                // yet, then it is /possible/ that there are NO ledger
+                // entries by the time we execute this code.
+                // No problem though: we just return our starting balance,
+                // which should have already been initialized by
+                // this.InitializeCashSimulations() above.
+                return m_StartingBalance;
+            }
+        }
+
+        /// Code that should run only one time for every vendor ever.
+        /// Once this has been run, the vendor will have a beginning
+        /// balance, and everything needed to recreate their current simulation
+        /// is serialized.
+        private void InitializeCashSimulations(DateTime when)
+        {
+            var rng = new Random();
+            this.m_StartingBalance =
+                rng.Next(TargetCashOnHandLow, TargetCashOnHandHigh);
+
+            // Randomize the first simulation's start-time so that players
+            // don't have the power to influence when vendors start their
+            // cashflow cycles.
+            // We also guarantee that the simulation starts in the past,
+            // hence the random interval starts at 1, not 0.
+            double minutesOffset = rng.Next(1, 60 * 24);
+            minutesOffset = -minutesOffset;
+            var simStart = when.AddMinutes(minutesOffset);
+
+            this.m_CashFlowSim = new CashFlowSimulation(
+                parent,
+                simStart,
+                this.m_StartingBalance,
+                NumSimulatedCashTransacts);
+
+            // A full update with UpdateCashSimulation is not necessary because
+            // we are only initializing vendors with a random number and
+            // some random part of one day of cash flow simulation. Thus, all
+            // of that is guaranteed to occur within the same day and will
+            // not require additional simulations, as is otherwise required
+            // when catching up history after some activity+downtime.
+            this.MergeCashSimulationLedger(when);
+        }
+
+        /// Runs daily cashflow simulations until the given 'upTo' date.
+        /// If there is a period of dormancy (cash-on-hand is within target
+        /// bounds and no player activity occurs), then m_StartingBalance
+        /// will be randomized to some number within the target bounds and
+        /// no subsequent simulations will occur.
+        private void UpdateCashSimulation(DateTime  upTo)
+        {
+            int idleDays = 0;
+            this.MergeCashSimulationLedger(upTo);
+
+            while ( this.m_CashFlowSim.EndTime < upTo )
+            {
+                int latestLedgerInSimIdx =
+                    ForwardFindEntryBeforeTime(this.m_Ledger, this.m_CashFlowSim.EndTime);
+                var nextSimStartTime = this.m_CashFlowSim.EndTime;
+                var nextSimStartingCash = this.GetCashOnHand(nextSimStartTime, false);
+
+                // Only start idle-counting when the vendor reaches their target cash-on-hand.
+                if ( TargetCashOnHandLow <= nextSimStartingCash 
+                &&       nextSimStartingCash < TargetCashOnHandHigh )
+                {
+                    // Count idle days.
+                    // E.g. there is no point simulating a bunch of transactions
+                    // for a vendor that hit a reasonable cash-on-hand and then
+                    // never saw anyone for 1000 days.
+
+                    // Value returned from ForwardFindEntryBeforeTime indicates
+                    // that all ledger entries are before 'upTo'. This is
+                    // effectively a check to ensure that there was no player-
+                    // driven activity since the end of the last daily sim.
+                    if ( latestLedgerInSimIdx + 1 < m_Ledger.Count )
+                        idleDays++;
+                    /*
+                    // This logic is commented out because it implies that a
+                    // non-simulated transaction happened AFTER the daily sim
+                    // in the last iteration of this loop. That is an indication
+                    // of activity (ex: player buy/sell), not dormancy.
+                    else
+                    if ( latestLedgerInSimIdx + 1 < m_Ledger.Count
+                    &&   m_Ledger[latestLedgerInSimIdx+1].TransactionTime > m_CashFlowSim.EndTime )
+                        idleDays++;
+                    */
+
+                    if ( idleDays >= NumDaysCashSimBeforeDormancy )
+                        break;
+                }
+                else
+                    idleDays = 0; // Matters when/if a simulation overshoots. Not sure if that should be allowed.
+
+                this.m_CashFlowSim =
+                    new CashFlowSimulation(
+                        parent,
+                        nextSimStartTime,
+                        nextSimStartingCash,
+                        NumSimulatedCashTransacts);
+
+                this.MergeCashSimulationLedger(upTo);
+            }
+
+            if ( idleDays >= NumDaysCashSimBeforeDormancy )
+            {
+                // Properly randomize the vendor's cash-on-hand.
+                var rng = new Random();
+                this.m_StartingBalance =
+                    rng.Next(TargetCashOnHandLow, TargetCashOnHandHigh);
+                this.m_Ledger.Clear();
+            }
+        }
+
+        /// Returns the index of the LedgerEntry in the given ledger that
+        /// directly precedes (or coincides with) the time given by 'theTime'.
+        /// Do it by starting at the beginning of the list and walking forwards.
+        /// If 'startAt' is negative, it will be clipped to 0 to prevent out-of-range
+        /// exceptions from being thrown.
+        /// If 'startAt' is greater than (ledger.Count-1), all entries will be
+        /// assumed to be before (earlier) than 'theTime'.
+        /// Returns -1 if all entries are past (after) 'theTime'.
+        /// If all entries are before (or coincident with) 'theTime', then
+        /// the index of the last entry is returned.
+        /// The ledger is assumed to be sorted by .TransactionTime
+        private static int ForwardFindEntryBeforeTime(List<LedgerEntry> ledger, DateTime theTime, int startAt = 0)
+        {
+            LedgerEntry e;
+
+            int i = startAt;
+            if ( i < 0 ) // Clip to 0 to prevent out-of-bounds issues.
+                i = 0;
+            else
+            if ( i >= ledger.Count ) // This also prevents out-of-bounds issues.
+                return ledger.Count-1;
+            // Now we can assume that 'i' is valid for dereferencing an element.
+
+            e = ledger[i];
+            if ( e.TransactionTime > theTime )
+            {
+                // In this case, given the sortedness of 'ledger',
+                // there will be no entries less than 'theTime'.
+                return -1;
+            }
+            i++;
+
+            for(; i < ledger.Count; i++)
+            {
+                e = ledger[i];
+                if ( e.TransactionTime > theTime )
+                    return i-1;
+            }
+
+            // All entries are before 'theTime', so just return the last one.
+            return ledger.Count - 1;
+        }
+
+        /// Like ForwardFindEntryBeforeTime, but starts at the last entry and
+        /// walks backwards. This could be much faster in situations where
+        /// you know that the target entry is likely near the end of the ledger.
+        /// Otherwise the forward-find will, of course, be faster for entries
+        /// likely to be near the front (earliest part) of the ledger.
+        ///
+        /// The 'startAt' parameter defaults to (ledger.Count - 1).
+        /// If the 'startAt' parameter is chosen to be something greater than
+        /// (ledger.Count-1), it will be clipped to prevent out-of-range
+        /// exceptions from occuring.
+        /// If the 'startAt' parameter is negative, this will assume that all
+        /// entries are past 'theTime'.
+        /// Returns -1 if all entries are past (after) 'theTime'.
+        /// If all entries are before (or coincident with) 'theTime', then
+        /// the index of the last entry is returned.
+        ///
+        /// The ledger is assumed to be sorted by .TransactionTime
+        private static int ReverseFindEntryBeforeTime(
+            List<LedgerEntry>  ledger,
+            DateTime           theTime)
+        {
+            return ReverseFindEntryBeforeTime(ledger, theTime, ledger.Count - 1);
+        }
+
+        /// ditto
+        private static int ReverseFindEntryBeforeTime(
+            List<LedgerEntry>  ledger,
+            DateTime           theTime,
+            int                startAt)
+        {
+            // Clip choice of 'startAt' index to within the list.
+            if ( startAt >= ledger.Count)
+                startAt = ledger.Count - 1;
+            // The loop's condition ensures that negative values don't
+            // attempt to dereference.
+
+            // Offset by 1 to make it possible to avoid duplicating part of the
+            // loop in the initialization.
+            int i = startAt+1;
+            while(i > 0)
+            {
+                i--;
+                LedgerEntry e = ledger[i];
+                if ( e.TransactionTime < theTime )
+                    return i;
+            }
+
+            // All entries are past/after 'theTime', so return -1.
+            return -1;
+        }
+        
+        /// This method merges all of the simulation ledger entries into the
+        /// vendor's proper ledger (m_Ledger).
+        ///
+        /// This method is idempotent: if it is ran more than once under the
+        /// same condition, then only the first run will make changes.
+        /// Thus, it can be ran repeatedly at different times in the day
+        /// whenever the vendor's ledger needs to be updated, without worrying
+        /// about creating duplicate entries. It has an O(n) time complexity
+        /// where n is the number of total ledger entries, so it should not
+        /// be ran more than once per world event, simply to keep things
+        /// responsive and performant.
+        ///
+        /// Note that unlike the static MergeLedgerInPlace method, this will
+        /// first truncate unnecessary ledger entries and update the
+        /// starting balance.
+        private void MergeCashSimulationLedger(DateTime upTo)
+        {
+            // The whole point of this is to merge the cash sim,
+            // which is a problem if there's no cash simulation. (There should be, though.)
+            if ( m_CashFlowSim == null )
+            {
+                // Other code will have initialized m_CashFlowSim by now.
+                // So, this shouldn't happen, but it's good to handle exceptions and write assertions.
+                this.m_Ledger = new List<LedgerEntry>();
+                return;
+            }
+
+            // Remove outdated ledger entries while updating the starting balance.
+            // This will make the merge potentially much more efficient,
+            // especially if we get called repeatedly on the same ledgers.
+            this.TruncateLedger();
+
+            // Now do what we're here for.
+            MergeLedgerInPlace(
+                ref this.m_Ledger,
+                this.m_CashFlowSim.Ledger,
+                upTo,
+                this.m_StartingBalance);
+        }
+
+        /// This method is idempotent and will not insert an entry in the 'from'
+        /// ledger into the 'into' ledger if there is already an equivalent entry
+        /// present (same time, transaction amount, and OtherParty).
+        ///
+        /// It is assumed that both ledgers are sorted by TransactionTime.
+        /// 'ledgerInto' will still be sorted after this method returns.
+        ///
+        private static void MergeLedgerInPlace(
+            ref List<LedgerEntry>  intoLedger,
+            List<LedgerEntry>      fromLedger,
+            DateTime               upTo,
+            int                    startingBalance)
+        {
+            // Start at the most-future 'from' transaction and move backwards
+            // until we hit an entry that's before 'upTo'. This might happen
+            // immediately. Regardless, this will give us an upper-bound for
+            // the amount of entries that could be added to the vendor's
+            // own ledger.
+            int mostRecentFromLedgerIdx =
+                ReverseFindEntryBeforeTime(fromLedger, upTo);
+            /*int mostRecentFromLedgerIdx = fromLedger.Length - 1;
+            for (; mostRecentFromLedgerIdx >= 0; mostRecentFromLedgerIdx-- )
+                if ( upTo >= fromLedger[mostRecentFromLedgerIdx].TransactionTime )
+                    break;*/
+
+            // mostRecentFromLedgerIdx is -1 if there were NO 'from' ledger
+            // entries before the given 'upTo' date. In that case, there's
+            // nothing to add to our ledger yet, and we can just exit
+            // this function.
+            if ( mostRecentFromLedgerIdx < 0 )
+                return;
+
+            // We'll need a blank LedgerEntry.
+            // Pulling entries from the lists isn't
+            // good for this because either one might be empty.
+            LedgerEntry blank;
+            blank.TransactionTime    = upTo;
+            blank.TransactionAmount  = 0;
+            blank.OtherParty         = null;
+            blank.RunningBalance     = 0;
+
+            // Create filler at the end of the ledger list.
+            // Extra space is going to be needed for efficient merging without
+            // unnecessary allocations.
+            int oldLedgerLen = intoLedger.Count;
+            int maxPossibleAdds = mostRecentFromLedgerIdx + 1;
+            for ( int i = 0; i < maxPossibleAdds; i++ )
+                intoLedger.Add(blank);
+
+            // Shift the list right-ward to move the space at the end of the
+            // list to at the beginning of the list. We need this, and we can't
+            // just work backwards, because every ledger entry keeps a running
+            // balance that depends on the previous entry. We won't know that
+            // unless we are moving front-to-back.
+            int j = oldLedgerLen;
+            while ( j > 0 )
+            {
+                j--;
+                intoLedger[j + maxPossibleAdds] = intoLedger[j];
+            }
+
+            // Now we will be generating a new ledger list while reading from
+            // two sources: the existing ledger list and the 'from' ledger.
+            // It just so happens that the new ledger list and the old
+            // ledger list cohabitate the same "List<LedgerEntry>" object,
+            // which allows us to avoid allocating another one. This is
+            // possible by the aforementioned extra space at the beginning
+            // of the list: we can treat the whole List object as empty because
+            // we will never be able to overwrite any entries that are
+            // yet-to-be-visited. Also we don't care about losing the original
+            // list as long as the new one has at least those entries.
+            int srcIndex  = maxPossibleAdds;
+            int dstIndex  = 0;
+            int fromIndex = 0;
+            LedgerEntry previousOutput;
+            previousOutput.RunningBalance = startingBalance;
+            while (srcIndex < intoLedger.Count || fromIndex < maxPossibleAdds)
+            {
+                LedgerEntry nextOutput;
+
+                if ( fromIndex >= fromLedger.Count )
+                {
+                    nextOutput = intoLedger[srcIndex];
+                    srcIndex++;
+                }
+                else
+                if ( srcIndex  >= intoLedger.Count )
+                {
+                    nextOutput = fromLedger[fromIndex];
+                    fromIndex++;
+                }
+                else
+                {
+                    LedgerEntry nextExisting = intoLedger[srcIndex];
+                    LedgerEntry nextFrom     = fromLedger[fromIndex];
+
+                    if ( nextExisting.TransactionTime < nextFrom.TransactionTime )
+                    {
+                        // An existing ledger entry is chronologically next.
+                        nextOutput = nextExisting;
+                        srcIndex++;
+                    }
+                    else
+                    if ( nextExisting.TransactionTime > nextFrom.TransactionTime )
+                    {
+                        // A 'from' ledger entry is chronologically next.
+                        nextOutput = nextFrom;
+                        fromIndex++;
+                    }
+                    else // Equal transaction times.
+                    {
+                        if (nextExisting.TransactionAmount == nextFrom.TransactionAmount
+                        &&  nextExisting.OtherParty        == nextFrom.OtherParty )
+                        {
+                            // To fulfill property of idempotency, we don't insert
+                            // any entries that already exist.
+                            fromIndex++; // Skip the sim entry.
+                            continue; // Do not output into the resulting ledger.
+                        }
+                        else
+                        {
+                            // Corner case: simultaneous but different entries.
+                            // In this case, it doesn't matter which one is handled
+                            // first.
+                            nextOutput = nextExisting;
+                            srcIndex++;
+                        }
+                    }
+                }
+
+                // Note that negative balances are allowed. (Vendors can go into debt.)
+                nextOutput.RunningBalance = previousOutput.RunningBalance + nextOutput.TransactionAmount;
+                intoLedger[dstIndex] = nextOutput;
+                dstIndex++;
+                previousOutput = nextOutput;
+            }
+
+            // We may have overestimated how much larger we needed to make the
+            // ledger. If that's the case, adjust it shorter by removing the
+            // redundant/blank entries at the end of the list.
+            if ( dstIndex < intoLedger.Count )
+                intoLedger.RemoveRange(dstIndex, intoLedger.Count - dstIndex);
+        }
+
+        /// Removes all ledger entries that precede the current
+        /// cash simulation's start time, while updating this vendor's
+        /// starting balance. These entries shouldn't be needed for anything;
+        /// as of this writing the ledger is just used to integrate
+        /// player transactions with (currently) simulated transactions,
+        /// so it isn't necessary to remember any transactions that aren't
+        /// interspersed with (currently) simulated ones.
+        /// Assumption: ledger must be sorted by TransactionTime
+        /// for this algorithm to work correctly.
+        private void TruncateLedger()
+        {
+            // The whole point of this is to truncate up to the cash sim's start,
+            // which is a problem if there's no cash simulation. (There should be, though.)
+            if ( m_CashFlowSim == null )
+            {
+                // Other code will have initialized m_CashFlowSim by now.
+                // So, this shouldn't happen, but it's good to handle exceptions and write assertions.
+                this.m_Ledger = new List<LedgerEntry>();
+                return;
+            }
+
+            // There's a current valid daily simulation, so truncate
+            // everything up to the start of that sim.
+            m_StartingBalance = TruncateLedger(
+                ref m_Ledger,  m_CashFlowSim.StartTime,  m_StartingBalance);
+        }
+
+        /// Removes all ledger entries that chronologically precede 'upTo'.
+        /// Returns the new starting balance, which is also the running balance
+        /// of the last truncated entry is returned. If there were no entries,
+        /// or no truncation occurred, then the value of the 'startingBalance'
+        /// argument is returned.
+        /// (The 'startingBalance' parameter otherwise does not affect this
+        /// calculation, because the running balance of the last truncated
+        /// entry is otherwise used as the return value.)
+        /// Assumption: ledger must be sorted by TransactionTime
+        /// for this algorithm to work correctly.
+        private static int TruncateLedger(ref List<LedgerEntry> ledger, DateTime upTo, int startingBalance)
+        {
+            // This shouldn't happen, but we'll be paranoid and plan for it regardless.
+            if ( ledger == null )
+                ledger = new List<LedgerEntry>();
+
+            // This isn't just an optimization: it allows later code to assume
+            // that there are elements in this array.
+            if ( ledger.Count == 0 )
+                return startingBalance;
+
+            // Assumption: ledger must be sorted by TransactionTime
+            // for this algorithm to work correctly.
+            int oldIdx = ForwardFindEntryBeforeTime(ledger, upTo);
+
+            // By checking this, later code can assume that there is at least
+            // one entry in the list that will be truncated (e.g. one "old" entry).
+            if ( oldIdx < 0 )
+                return startingBalance; // Nothing to truncate.
+
+            /* First draft; less elegant code that doesn't use the forward-find method.
+            // Assumption: ledger must be sorted by TransactionTime
+            // for this algorithm to work correctly.
+            var truncateUpTo = upTo;
+            int oldIdx = 0;
+            while ( oldIdx < ledger.Count && ledger[oldIdx].TransactionTime < truncateUpTo )
+                oldIdx++;
+
+            // By checking this, later code can assume that there is at least
+            // one entry in the list that will be truncated (e.g. one "old" entry).
+            if ( oldIdx == 0 )
+                return startingBalance; // Nothing to truncate.
+            */
+
+            // Update the beginning balance.
+            // This must be done BEFORE the next step, because we are
+            // about to overwrite/delete the source of this information.
+            var newStartingBalance = ledger[oldIdx].RunningBalance;
+            int srcIdx = oldIdx+1;
+
+            // We'll just slide all of the entries at the end of the ledger
+            // up to the beginning of the list.
+            int dstIdx = 0;
+            while ( srcIdx < ledger.Count )
+            {
+                ledger[dstIdx] = ledger[srcIdx];
+                dstIdx++; srcIdx++;
+            }
+
+            // Reclaim memory (sorta).
+            // This tells C#/.NET that it doesn't need as many spots in the
+            // list anymore, and it may or may not actually reclaim that
+            // memory. (It probably will, just not right now.)
+            if ( dstIdx < ledger.Count )
+                ledger.RemoveRange(dstIdx, ledger.Count - dstIdx);
+
+            return newStartingBalance;
+        }
+        
+        private static int GetLineNumber()
+        {
+            StackFrame callStack = new StackFrame(1, true);
+            return callStack.GetFileLineNumber();
+        }
+        
+        public void AddTransaction(
+            DateTime transactionTime,
+            int      transactionAmount, // Positive if the vendor made money, negative for loss.
+            Mobile   otherParty         // Who is buying from or selling to the vendor.
+            )
+        {
+            LedgerEntry e;
+            e.TransactionTime = transactionTime;
+            e.TransactionAmount = transactionAmount;
+            e.OtherParty = otherParty;
+            e.RunningBalance = 0;
+            this.AddTransaction(e);
+        }
+
+        public void AddTransaction(LedgerEntry e)
+        {
+            AddTransaction(ref m_Ledger, e, m_StartingBalance);
+
+            // This is done in case the vendor is selling something that
+            // might put them over their maximum cash-on-hand. To really
+            // know if it is, we'll need to know our up-to-date max-cash value.
+            UpdateMaxCash(e.TransactionTime);
+
+            // Check for the previous transaction exceeding the
+            // maximum cash on hand, and add an adjustment entry
+            // if it does.
+            int cashOnHand = this.GetCashOnHand(e.TransactionTime);
+            if ( cashOnHand > this.m_CurrentMaxCash )
+            {
+                // This will probably have to rescan part of the ledger,
+                // and is thus suboptimal. It could be better. But it should work.
+                int adjustmentAmount = cashOnHand - this.m_CurrentMaxCash;
+                adjustmentAmount = -adjustmentAmount;
+                this.AddTransaction(
+                    e.TransactionTime,
+                    adjustmentAmount,
+                    e.OtherParty
+                    );
+            }
+        }
+
+        public static void AddTransaction(
+            ref List<LedgerEntry>  ledger,
+            LedgerEntry            e,
+            int                    startingBalance)
+        {
+            ledger.Add(e);
+
+            // Keep the array sorted.
+            // This should be done, even if it doesn't make sense
+            // to insert an element with an earlier date AFTER
+            // inserting an element with a later date.
+            // Most likely, this will not need to do any iterations.
+            int i = ledger.Count - 1;
+            LedgerEntry prev = ledger[i];
+            while ( i >= 1 )
+            {
+                i--;
+                prev = ledger[i+0];
+                if ( prev.TransactionTime < e.TransactionTime )
+                    break; // Sorted.
+
+                // Swap.
+                ledger[i+0] = e;    // Previously 'prev'
+                ledger[i+1] = prev; // Previously 'e'
+            }
+
+            // Prepare for running balance update by retrieving
+            // the element before the one we just inserted.
+            if ( i <= 0 )
+            {
+                // If there is no prior element; use starting balance.
+                prev.RunningBalance = startingBalance;
+                i = 0; // Shouldn't be necessary. It's like assert(i==0), but we shouldn't crash for this.
+            }
+            else
+            {
+                prev = ledger[i];
+                i++;
+            }
+
+            // Update running balances.
+            LedgerEntry next;
+            for ( ; i < ledger.Count; i++ )
+            {
+                next = ledger[i];
+                next.RunningBalance =
+                    prev.RunningBalance + next.TransactionAmount;
+                ledger[i] = next;
+                prev = next;
+            }
+        }
+
+        private void UpdateMaxCash(DateTime transactionTime)
+        {
+            if ( transactionTime < m_NextMaxCashReset )
+                return; // It's current. No update needed.
+
+            var rng = new Random();
+
+            // Calculate when it should update next.
+            if ( transactionTime > m_NextMaxCashReset.AddDays(MaxDaysBeforeMaxCashReset) )
+            {
+                // The last reset is far back in history.
+                // It's not worth calling GetNextMaxCashTime possibly hundreds
+                // of times. Just picking a random day within the max-days range
+                // and iterating from that should be plenty of obfuscation.
+
+                // Random value between 0.0 and 1.0
+                double randRangeInSeconds = rng.NextDouble();
+
+                // Scale it to the min/max range.
+                randRangeInSeconds *= (60*60*24)*MaxDaysBeforeMaxCashReset;
+                
+                // This should place m_NextMaxCashReset within 'MaxDaysBeforeMaxCashReset'
+                // days of the transaction time.
+                randRangeInSeconds = -randRangeInSeconds; // Actually subtract seconds.
+                m_NextMaxCashReset = transactionTime.AddSeconds(randRangeInSeconds);
+            }
+
+            // Now that we've made sure that (the previous) m_NextMaxCashReset
+            // is within 'MaxDaysBeforeMaxCashReset' of our transaction time
+            // (which is essentially the "now" time, for this calculation)
+            // we will iterate it until it's in the future. This should be
+            // a small number of iterations, unless MinDaysBeforeMaxCashReset
+            // is set really small compared to MaxDaysBeforeMaxCashReset AND
+            // we get a lot of unlucky roles.
+            while ( transactionTime >= m_NextMaxCashReset )
+                this.m_NextMaxCashReset =
+                    GetNextMaxCashTime(rng, this.m_NextMaxCashReset);
+
+            // Now for the max cash value itself:
+            this.m_CurrentMaxCash =
+                rng.Next(MaxCashOnHandLow, MaxCashOnHandHigh);
+            // Note that there is no re-running of this calculation for each
+            // iteration of reset-time. It's not a derivitive quantity like the
+            // cash on hand (cash on hand is supposed to act kind of like it
+            // would in an economy), so the only value that matters is the most
+            // recent one.
+        }
+
+        private static DateTime GetNextMaxCashTime(Random rng, DateTime currentCashResetTime)
+        {
+            // Random value between 0.0 and 1.0
+            double randRangeInSeconds = rng.NextDouble();
+
+            // Scale it to the min/max range.
+            randRangeInSeconds *= (60*60*24)*(MaxDaysBeforeMaxCashReset - MinDaysBeforeMaxCashReset);
+
+            // Place the next cash reset this much farther out.
+            return currentCashResetTime.AddSeconds(randRangeInSeconds);
+        }
+
+        public override string ToString()
+        {
+            var sb = new StringBuilder();
+            this.ToString(ref sb);
+            return sb.ToString();
+        }
+
+        public void ToString(ref StringBuilder text)
+        {
+            text.Append("== Ledger Header ==\r\n");
+            text.AppendFormat("Starting Balance = {0}\r\n", this.m_StartingBalance);
+            text.AppendFormat("Max cash on hand = {0}\r\n", this.m_CurrentMaxCash);
+            text.AppendFormat(
+                "Max cash reset = {0,-16:yyyy-MM-dd.HH:mm}\r\n",
+                this.m_NextMaxCashReset);
+
+            text.Append("\r\n");
+            text.Append("-- Cash Flow Simulation --\r\n");
+            if ( this.m_CashFlowSim == null )
+                text.Append("Cash flow sim is null.\r\n");
+            else
+                this.m_CashFlowSim.ToString(ref text);
+
+            text.Append("\r\n");
+            text.Append          ("   Trans Time   |Amount|Balance");
+            // -------------------|YYYY-MM-DD.HH:MM|NNNNNN|NNNNNNN|--
+            text.Append          ("----------------+------+-------");
+            for ( int i = 0; i < this.m_Ledger.Count; i++ )
+                text.AppendFormat("{0,-16:yyyy-MM-dd.HH:mm}|{1,6}|{2,7}\r\n",
+                    this.m_Ledger[i].TransactionTime,
+                    this.m_Ledger[i].TransactionAmount,
+                    this.m_Ledger[i].RunningBalance);
+        }
+
+        private static char ToSuperscriptChar(char ch)
+        {
+            // Reference:
+            // https://en.wikipedia.org/wiki/Unicode_subscripts_and_superscripts
+            // https://stackoverflow.com/questions/17908593/how-to-find-the-unicode-of-the-subscript-alphabet
+            switch(ch)
+            {
+                // Unicode gives a lot of options for space characters.
+                // We're picking the one that renders as close to the
+                // width of the letters/digits as possible on the
+                // Enhanced Client. (The classic client doesn't render
+                // all of these codepoints correctly anyways.)
+                case ' ': return '\x2004';
+
+                // Lowercase letters.
+                case 'a': return '\x1d43';
+                case 'b': return '\x1d47';
+                case 'c': return '\x1d9c';
+                case 'd': return '\x1d48';
+                case 'e': return '\x1d49';
+                case 'f': return '\x1da0';
+                case 'g': return '\x1d4d';
+                case 'h': return '\x02b0';
+                case 'i': return '\x2071';
+                case 'j': return '\x02b2';
+                case 'k': return '\x1d4f';
+                case 'l': return '\x02e1';
+                case 'm': return '\x1d50';
+                case 'n': return '\x207f';
+                case 'o': return '\x1d52';
+                case 'p': return '\x1d56';
+                // Note that 'q' is missing. Just to annoy you. Because Unicode Consortium.
+                case 'r': return '\x02b3';
+                case 's': return '\x02e2';
+                case 't': return '\x1d57';
+                case 'u': return '\x1d58';
+                case 'v': return '\x1d5b';
+                case 'w': return '\x02b7';
+                case 'x': return '\x02e3';
+                case 'y': return '\x02b8';
+                case 'z': return '\x1dbb';
+                
+                // Capital letters.
+                // Mapped to lowercase when upper is not available.
+                // (see default case)
+                case 'A': return '\x1d2c';
+                case 'B': return '\x1d2e';
+                case 'D': return '\x1d30';
+                case 'E': return '\x1d31';
+                case 'G': return '\x1d33';
+                case 'H': return '\x1d34';
+                case 'I': return '\x1d35';
+                case 'J': return '\x1d36';
+                case 'K': return '\x1d37';
+                case 'L': return '\x1d38';
+                case 'M': return '\x1d39';
+                case 'N': return '\x1d3a';
+                case 'O': return '\x1d3c';
+                case 'P': return '\x1d3e';
+                case 'R': return '\x1d3f';
+                case 'T': return '\x1d40';
+                case 'U': return '\x1d41';
+                case 'V': return '\x2c7d';
+                case 'W': return '\x1d42';
+
+                // Numbers and symbols.
+                case '0': return '\x2070';
+                case '1': return '\x00B9';
+                case '2': return '\x00B2';
+                case '3': return '\x00B3';
+                case '+': return '\x207A';
+                case '-': return '\x207B';
+                case '=': return '\x207C';
+                case '(': return '\x207D';
+                case ')': return '\x207E';
+                default:
+                    if ( '4' <= ch && ch <= '9' )
+                        return (char)((ch - '0') + '\x2070');
+                    else
+                    if ( 'A' <= ch && ch <= 'Z' && ch != 'Q' )
+                        // Unmatched uppers get replaced with lowers.
+                        // (Unicode does not support all of them as of 2020-06-08, and might never.)
+                        return ToSuperscriptChar((char)((ch - 'A') + 'a'));
+                    else
+                        return ch;
+            }
+        }
+
+        private static char ToSubscriptChar(char ch)
+        {
+            // Reference:
+            // https://en.wikipedia.org/wiki/Unicode_subscripts_and_superscripts
+            // https://stackoverflow.com/questions/17908593/how-to-find-the-unicode-of-the-subscript-alphabet
+            switch(ch)
+            {
+                // Unicode gives a lot of options for space characters.
+                // We're picking the one that renders as close to the
+                // width of the letters/digits as possible on the
+                // Enhanced Client. (The classic client doesn't render
+                // all of these codepoints correctly anyways.)
+                case ' ': return '\x2004';
+
+                // Lowercase letters, or at least the few that are implemented.
+                case 'a': return '\x2090';
+                case 'e': return '\x2091';
+                case 'h': return '\x2095';
+                case 'i': return '\x1d62';
+                case 'j': return '\x2c7c';
+                case 'k': return '\x2096';
+                case 'l': return '\x2097';
+                case 'm': return '\x2098';
+                case 'n': return '\x2099';
+                case 'o': return '\x2092';
+                case 'p': return '\x209a';
+                case 'r': return '\x1d63';
+                case 's': return '\x209b';
+                case 't': return '\x209c';
+                case 'u': return '\x1d64';
+                case 'v': return '\x1d65';
+                case 'x': return '\x2093';
+                
+                // Unicode does not support uppercase subscripts. Too bad, so sad.
+                // We will substitute these for lowercase subscripts whenever
+                // it allows the character to print as subscript.
+                // See default case for details.
+
+                // Digits and specials.
+                case '+': return '\x208A';
+                case '-': return '\x208B';
+                case '=': return '\x208C';
+                case '(': return '\x208D';
+                case ')': return '\x208E';
+                default:
+                    if ( '0' <= ch && ch <= '9' )
+                        return (char)((ch - '0') + '\x2080');
+                    else
+                    if ( 'A' <= ch && ch <= 'Z' )
+                    {
+                        // Unmatched uppers get replaced with lowers, if possible.
+                        // (Unicode does not support all of them as of 2020-06-08, and might never.)
+                        char lowerReplacement = (char)((ch - 'A') + 'a');
+                        char lowerSubscript   = ToSubscriptChar(lowerReplacement);
+                        if ( lowerReplacement == lowerSubscript )
+                            return ch; // No subscript available at all.
+                        else
+                            return lowerSubscript; // Lowercase it to get SOMETHING.
+                    }
+                    else
+                        return ch;
+            }
+        }
+
+        private static string ToSuperscript(string text)
+        {
+            var sb = new StringBuilder();
+            foreach( char ch in text )
+                sb.Append(ToSuperscriptChar(ch));
+            return sb.ToString();
+        }
+
+        private static string ToSubscript(string text)
+        {
+            var sb = new StringBuilder();
+            foreach( char ch in text )
+                sb.Append(ToSubscriptChar(ch));
+            return sb.ToString();
+        }
+
+        private static string Underscore(string text)
+        {
+            var sb = new StringBuilder();
+            foreach( char ch in text )
+            {
+                sb.Append(ch);
+                sb.Append('\x0332'); // "combining low line". It's an underscore, but it composes.
+            }
+            return sb.ToString();
+        }
+
+        public List<BookPageInfo> ToBookPages()
+        {
+            var pages = new List<BookPageInfo>();
+            string[] lines;
+            
+            // Header page.
+            lines = new string[8];
+            lines[0] = "== Ledger Header ==";
+            lines[1] = "Starting balance:";
+            lines[2] = String.Format("    {0} gp", this.m_StartingBalance);
+            lines[3] = "Max cash on hand:";
+            lines[4] = String.Format("    {0} gp", this.m_CurrentMaxCash);
+            lines[5] = "Max cash resets on:";
+            lines[6] = String.Format("  {0,-16:yyyy-MM-dd.HH:mm}", this.m_NextMaxCashReset);
+            if ( this.m_CashFlowSim == null )
+                lines[7] = "Cash flow sim is null.";
+            else
+                lines[7] = "";
+            pages.Add(new BookPageInfo(lines));
+
+            // Cash flow simulation
+            if ( this.m_CashFlowSim != null )
+                pages.AddRange(this.m_CashFlowSim.ToBookPages());
+
+            // Ledger Entries.
+            // Note that we can fit 8 per page.
+            // Pages have 9 lines, so the 9th line (1st line, really)
+            // is used for the header, which leaves 8 for the rest.
+            if ( this.m_Ledger == null )
+            {
+                lines = new string[2];
+                lines.Append("List of ledger entries");
+                lines.Append("is null.");
+                pages.Add(new BookPageInfo(lines));
+            }
+            else
+            {
+                // Valid ledger.
+                int nEntryPages = this.m_Ledger.Count / 8;
+                if ( nEntryPages * 8 != this.m_Ledger.Count )
+                    nEntryPages++; // Round up always.
+
+                var text = new StringBuilder();
+                for ( int pgNum = 0; pgNum < nEntryPages; pgNum++ )
+                {
+                    int startIdx = pgNum*8;
+                    int entriesRemaining = (this.m_Ledger.Count - startIdx);
+                    int nEntries = 8;
+                    if ( entriesRemaining < 8 )
+                        nEntries = entriesRemaining;
+
+                    int nLines = nEntries + 1; // ex: 8 entries + 1 header
+                    lines = new string[nLines];
+
+                    // The \x2009 is a "thin" space. It aligns the column line.
+                    lines[0] = Underscore("Trans Time|Amt\x2009| Bal");
+                    for ( int lineIdx = 1; lineIdx < nLines; lineIdx++ )
+                    {
+                        int entryIdx = startIdx + (lineIdx-1);
+                        LedgerEntry e = this.m_Ledger[entryIdx];
+                        text.AppendFormat(ToSubscript(String.Format(
+                            "{0,-16:yyyy-MM-dd HH mm}", e.TransactionTime)));
+                        text.Append("|");
+                        text.AppendFormat(ToSubscript(String.Format(
+                            "{0,6}", e.TransactionAmount)));
+                        text.Append("|");
+                        text.AppendFormat(ToSubscript(String.Format(
+                            "{0,7}", e.RunningBalance)));
+
+                        lines[lineIdx] = text.ToString();
+                        text.Clear();
+                    }
+                    pages.Add(new BookPageInfo(lines));
+                }
+            }
+            // Ledger entry list output is done.
+
+            /*
+            // debugging space widths on EC
+            lines = new string[9];
+            lines[0] = "Unicode spaces 1";
+            lines[1] = "\x0020\x0020\x0020\x0020|";
+            lines[2] = ToSuperscript("0020");
+            lines[3] = "\x2000\x2000\x2000\x2000|";
+            lines[4] = ToSuperscript("2000");
+            lines[5] = "\x2001\x2001\x2001\x2001|";
+            lines[6] = ToSuperscript("2001");
+            lines[7] = "\x2002\x2002\x2002\x2002|";
+            lines[8] = ToSuperscript("2002");
+            pages.Add(new BookPageInfo(lines));
+            
+            lines = new string[9];
+            lines[0] = "Unicode spaces 2";
+            lines[1] = "\x2003\x2003\x2003\x2003|";
+            lines[2] = ToSuperscript("2003");
+            lines[3] = "\x2004\x2004\x2004\x2004|";
+            lines[4] = ToSuperscript("2004");
+            lines[5] = "\x2005\x2005\x2005\x2005|";
+            lines[6] = ToSuperscript("2005");
+            lines[7] = "\x2006\x2006\x2006\x2006|";
+            lines[8] = ToSuperscript("2006");
+            pages.Add(new BookPageInfo(lines));
+            
+            lines = new string[9];
+            lines[0] = "Unicode spaces 3";
+            lines[1] = "\x2007\x2007\x2007\x2007|";
+            lines[2] = ToSuperscript("2007");
+            lines[3] = "\x2008\x2008\x2008\x2008|";
+            lines[4] = ToSuperscript("2008");
+            lines[5] = "\x2009\x2009\x2009\x2009|";
+            lines[6] = ToSuperscript("2009");
+            lines[7] = "\x200A\x200A\x200A\x200A|";
+            lines[8] = ToSuperscript("200a");
+            pages.Add(new BookPageInfo(lines));
+            
+            lines = new string[7];
+            lines[0] = "Unicode spaces 4";
+            lines[1] = "\x202F\x202F\x202F\x202F|";
+            lines[2] = ToSuperscript("202f");
+            lines[3] = "\x205F\x205F\x205F\x205F|";
+            lines[4] = ToSuperscript("205f");
+            lines[5] = "\x3000\x3000\x3000\x3000|";
+            lines[6] = ToSuperscript("3000");
+            pages.Add(new BookPageInfo(lines));
+            */
+
+            return pages;
+        }
+
+        private sealed class CashFlowSimulation
+        {
+            /// This parameter establishes the start of an interval of time
+            /// in which the vendor "made" or "lost" money (cash/gp).
+            public  DateTime StartTime;
+
+            /// The amount of cash the vendor had at the beginning of this
+            /// interval of time.
+            public int       StartingCash;
+
+            /// The number of "transactions" the vendor is to make in the
+            /// timespan given by "StartTime" and "EndTime". Each transaction
+            /// is a debit or credit that brings the vendor's cash-on-hand
+            /// closer to its assigned target cash-on-hand.
+            public  int      NumberOfTransactions;
+
+            /// This is the number that seeded the random number generator
+            /// that was used to make this simulation.
+            public  int      Seed;
+
+            // Everything below this point is derived from the above params.
+            public  DateTime EndTime;
+
+            public List<LedgerEntry> Ledger { get { return m_Ledger; } }
+            private List<LedgerEntry>  m_Ledger;
+
+            public CashFlowSimulation(
+                BaseVendor  vendor,
+                DateTime    startTime,
+                int         startingCash,
+                int         numTransactions)
+            {
+                var rngBootStrap = new Random();
+                this.initialize(
+                    vendor,
+                    startTime,
+                    startingCash,
+                    numTransactions,
+                    rngBootStrap.Next());
+            }
+
+            public CashFlowSimulation(
+                BaseVendor  vendor,
+                DateTime    startTime,
+                int         startingCash,
+                int         numTransactions,
+                int         rngSeed)
+            {
+                this.initialize(
+                    vendor,
+                    startTime,
+                    startingCash,
+                    numTransactions,
+                    rngSeed);
+            }
+
+            public void initialize(
+                BaseVendor  vendor,
+                DateTime    startTime,
+                int         startingCash,
+                int         numTransactions,
+                int         rngSeed)
+            {
+                var rng = new Random(rngSeed);
+
+                this.StartTime            = startTime;
+                this.StartingCash         = startingCash;
+                this.NumberOfTransactions = numTransactions;
+                this.Seed                 = rngSeed;
+                this.m_Ledger             = null;
+
+                // Calculate how long this vendor's day is.
+                // (They work pretty long hours. I mean, I've probably worked
+                // a 26 hour day at some point, but these guys might do that
+                // every other day! They must never sleep...)
+                double intervalSpreadInSeconds = (60.0 * 60.0 * HoursSpreadOnCashDays);
+                double intervalSpanInSeconds = (0.0
+                    + (60.0 * 60.0 * 24.0)            // One Day
+                    + (((rng.NextDouble() * 2) - 1.0) // Random value between -1.0 and 1.0
+                    * intervalSpreadInSeconds)        // Magnitude of randomization
+                );
+
+                this.EndTime = startTime.AddSeconds(intervalSpanInSeconds);
+
+                // This is how much our universe /wants/ the vendor to have
+                // at the end of the day. However, cash flow is limited, so
+                // the vendor might not hit this number (which is good,
+                // because we don't want to have a vendor make a ton of
+                // money off of a player and then get cleaned out within
+                // an hour... routinely).
+                int targetCashOnHand = rng.Next(
+                    TargetCashOnHandLow, TargetCashOnHandHigh);
+
+                // Figure out how much this vendor is going to make/lose today.
+                int netCashFlow   = 0;
+                int distance      = (targetCashOnHand - startingCash);
+                int absDistance   = Math.Abs(distance);
+                if ( distance > 0 )
+                {
+                    // Cash comes IN
+                    netCashFlow = rng.Next(0, MaxDailyCashInflow);
+                    netCashFlow = Math.Min(netCashFlow, absDistance);
+                }
+                else
+                if ( distance < 0 )
+                {
+                    // Cash goes OUT
+                    netCashFlow = rng.Next(0, MaxDailyCashOutflow);
+                    netCashFlow = Math.Min(netCashFlow, absDistance);
+                    netCashFlow = -netCashFlow;
+                }
+
+                // Now we know how much the vendor's balance is going to change
+                // (assuming no player interaction).
+                // In this part, we generate a ledger that would cause that
+                // change in balance. We're going to go about it simply and just
+                // assume that all transactions run in the same direction. It's
+                // not very realistic, but it should do just fine to obscure
+                // game mechanics.
+                //
+                // This is going to involve creating randomized partitions in
+                // both time and in the cash flow.
+
+                // We do this in a while-loop because there are improbably
+                // things that could go wrong, and we want to be able to
+                // grab more random numbers and try again.
+                var transTimeWeights   = new double[numTransactions];
+                var transAmountWeights = new double[numTransactions];
+                while(true)
+                {
+                    // First, we calculate weights for each partition:
+                    for ( int i = 0; i < numTransactions; i++ )
+                    {
+                        transTimeWeights[i]   = rng.NextDouble();
+                        transAmountWeights[i] = rng.NextDouble();
+                    }
+
+                    // Next, we normalize these, so that each weight
+                    // represents a percentage of the time interval
+                    // or the cash flow. I say "percentage" because
+                    // all of these values should sum up to %100 (=1.0),
+                    // no more and no less.
+                    // It wouldn't be a proper partitioning if the
+                    // sum of the parts didn't add up to the whole.
+                    double timeMagnitude = 0.0;
+                    double flowMagnitude = 0.0;
+                    for ( int i = 0; i < numTransactions; i++ )
+                    {
+                        timeMagnitude += transTimeWeights[i];
+                        flowMagnitude += transAmountWeights[i];
+                    }
+
+                    // Prevent div-by-zero.
+                    if ( timeMagnitude == 0 || flowMagnitude == 0 )
+                    {
+                        // Super unlikely, but technically possible.
+                        // Causes retry.
+                        continue;
+                    }
+
+                    for ( int i = 0; i < numTransactions; i++ )
+                    {
+                        transTimeWeights[i]   /= timeMagnitude;
+                        transAmountWeights[i] /= flowMagnitude;
+                    }
+
+                    break;
+                }
+
+                // Yay, normalization GET!
+                // Now we multiply these normal vectors by their
+                // respective magnitudes (time and flow) to get
+                // ledger entries. Next time you talk to your
+                // accountant, just tell them that all they need to be
+                // able to cook your books right is to just use
+                // a little bit of vector math... they'll love you.
+                //
+                // Note that this generates an array sorted by TransactionTime.
+                // We will expect all ledgers to be datetime-sorted.
+                // In this case, it helps us compute the running balance.
+                // After this, the caller may need to merge this ledger
+                // with another one, at which point sortedness helps again.
+                int prevBalance = startingCash;
+                this.m_Ledger = new List<LedgerEntry>(numTransactions);
+                for ( int i = 0; i < numTransactions; i++ )
+                {
+                    LedgerEntry e;
+                    e.TransactionTime = 
+                        startTime.AddSeconds(
+                            Math.Round(
+                                transTimeWeights[i] * intervalSpanInSeconds
+                            )
+                        );
+
+                    e.TransactionAmount =
+                        (int)Math.Round(transAmountWeights[i] * netCashFlow);
+
+                    // Avoid putting null here.
+                    // null might cause crashing. That's bad.
+                    // Instead, we'll just have the vendor play with itself.
+                    e.OtherParty = vendor;
+                    
+                    // Note that we cannot yet calculate running balance,
+                    // because the ledger list might not be sorted.
+                    e.RunningBalance = 0;
+
+                    this.m_Ledger.Add(e);
+                }
+                
+                // Sort the ledger by date.
+                // We will expect all ledgers to be date-sorted.
+                // In this case, it helps us compute the running balance.
+                // After this, the caller may need to merge this ledger
+                // with another one, at which point sorting helps again.
+                this.m_Ledger.Sort(
+                    (a,b) => a.TransactionTime.CompareTo(b.TransactionTime));
+
+                // Calculate running balances, now that the thing is sorted.
+                for ( int i = 0; i < numTransactions; i++ )
+                {
+                    LedgerEntry e = this.m_Ledger[i];
+                    e.RunningBalance = prevBalance + e.TransactionAmount;
+                    this.m_Ledger[i] = e;
+                }
+            }
+
+            public override string ToString()
+            {
+                var sb = new StringBuilder();
+                this.ToString(ref sb);
+                return sb.ToString();
+            }
+
+            public void ToString(ref StringBuilder text)
+            {
+                text.AppendFormat("Start Time = {0,-16:yyyy-MM-dd.HH:mm:ss}\r\n", StartTime);
+                text.AppendFormat("End Time   = {0,-16:yyyy-MM-dd.HH:mm:ss}\r\n", EndTime);
+                text.AppendFormat("Starting Cash = {0}\r\n", StartingCash);
+                text.AppendFormat("Num Transactions = {0}\r\n", NumberOfTransactions);
+                text.AppendFormat("Random Seed = {0:X}", Seed);
+                if ( this.m_Ledger == null )
+                    text.AppendFormat("Cash sim ledger is null.");
+                else
+                {
+                    text.Append("Amounts = [");
+                    int i = 0;
+                    if ( i < this.m_Ledger.Count )
+                        text.AppendFormat("{0}", this.m_Ledger[i++].TransactionAmount);
+                    while ( i < this.m_Ledger.Count )
+                        text.AppendFormat(", {0}", this.m_Ledger[i++].TransactionAmount);
+                    text.Append("]\r\n");
+                }
+            }
+
+            public List<BookPageInfo> ToBookPages()
+            {
+                var pages = new List<BookPageInfo>();
+                string[] lines;
+                
+                // Header page.
+                lines = new string[8];
+                lines[0] = "== Cash Sim. ==";
+                lines[1] = "Start time:";
+                lines[2] = String.Format("    {0,-16:yyyy-MM-dd.HH:mm}", this.StartTime);
+                lines[3] = "End time:";
+                lines[4] = String.Format("    {0,-16:yyyy-MM-dd.HH:mm}", this.EndTime);
+                lines[5] = String.Format("Start Cash: {0}", this.StartingCash);
+                lines[6] = String.Format("# of Trans: {0}", this.NumberOfTransactions);
+                lines[7] = String.Format("Rand Seed: {0:X}", this.Seed);
+                pages.Add(new BookPageInfo(lines));
+                return pages;
+            }
+
+            public void Serialize(GenericWriter writer)
+            {
+                writer.Write(this.StartTime);
+                writer.Write(this.StartingCash);
+                writer.Write(this.NumberOfTransactions);
+                writer.Write(this.Seed);
+            }
+
+            public static CashFlowSimulation Deserialize(GenericReader reader, BaseVendor vendor)
+            {
+                DateTime  startTime        = reader.ReadDateTime();
+                int       startingCash     = reader.ReadInt();
+                int       numTransactions  = reader.ReadInt();
+                int       rngSeed          = reader.ReadInt();
+                return new CashFlowSimulation(
+                    vendor,
+                    startTime,
+                    startingCash,
+                    numTransactions,
+                    rngSeed );
+            }
+        }
+
+        public void Serialize(GenericWriter writer)
+        {
+            // Version 1
+            writer.Write((int)1); // version
+            writer.Write(m_StartingBalance);
+
+            if ( m_Ledger == null )
+                writer.Write((int)0);
+            else
+                writer.Write(m_Ledger.Count);
+
+            for ( int i = 0; i < m_Ledger.Count; i++ )
+            {
+                LedgerEntry e = m_Ledger[i];
+                writer.Write(e.TransactionTime);
+                writer.Write(e.TransactionAmount);
+                writer.Write(e.OtherParty);
+            }
+
+            writer.Write(m_CurrentMaxCash);
+            writer.Write(m_NextMaxCashReset);
+
+            if ( this.m_CashFlowSim == null )
+                writer.Write(false);
+            else
+            {
+                writer.Write(true);
+                this.m_CashFlowSim.Serialize(writer);
+            }
+        }
+
+        public void Deserialize(GenericReader reader, BaseVendor vendor)
+        {
+            int version = reader.ReadInt();
+            
+            switch(version)
+            {
+                case 1:
+                    m_StartingBalance = reader.ReadInt();
+                
+                    int ledgerCount = reader.ReadInt();
+                    if ( ledgerCount > 0 )
+                    {
+                        m_Ledger.Capacity = ledgerCount;
+
+                        LedgerEntry prev;
+                        prev.RunningBalance = m_StartingBalance;
+                        for ( int i = 0; i < ledgerCount; i++ )
+                        {
+                            LedgerEntry e;
+                            e.TransactionTime   = reader.ReadDateTime();
+                            e.TransactionAmount = reader.ReadInt();
+                            e.OtherParty        = reader.ReadMobile();
+                            e.RunningBalance    = prev.RunningBalance + e.TransactionAmount;
+                            m_Ledger.Add(e);
+                            prev = e;
+                        }
+                    }
+
+                    m_CurrentMaxCash   = reader.ReadInt();
+                    m_NextMaxCashReset = reader.ReadDateTime();
+
+                    if ( reader.ReadBool() )
+                        this.m_CashFlowSim = CashFlowSimulation.Deserialize(reader, vendor);
+                    break;
+            }
+        }
+    }
 }
 
 namespace Server
@@ -2720,6 +4414,31 @@ namespace Server
 
         //does the vendor resell this item?
         bool IsResellable(Item item);
+
+        // Sell price before any modifies for quality/magic.
+        int GetBaseSellPriceFor(Type type);
+        int GetBaseSellPriceFor(Item item);
+
+        // This is intended to handle corner cases like
+        // allowing players to profit more from magic items.
+        bool IsItemWorthGoingIntoDebt(Item item, BaseVendor vendor);
+
+        // Limit the amount of gold made from one type of item.
+        // The version of this method that requires a BaseVendor
+        // object will run the "worth going into debt" calculation
+        // and then invoke the other version.
+        int MaxPayForItem(
+            DateTime   transactionTime,
+            Item       item,
+            BaseVendor vendor);
+
+        int MaxPayForItem(
+            DateTime transactionTime,
+            Item     item,
+            bool     itemWorthGoingIntoDebt);
+
+        // Record sales. Ex: to prevent selling way too much of one thing.
+        void OnSold(DateTime transactionTime, Type itemType, int itemQty, int amountPaid);
     }
 
     public interface IBuyItemInfo

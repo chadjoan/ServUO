@@ -7,8 +7,20 @@ namespace Server.Mobiles
 {
     public class GenericSellInfo : IShopSellInfo
     {
+        public static int SplurgeRatioThreshold = Config.Get("Vendors.SplurgeRatioThreshold", 5);
+        public static int MaxSpendingOnEachItemPerDay = Config.Get("Vendors.MaxSpendingOnEachItemPerDay", 1200);
+
+        protected struct Sale
+        {
+            public DateTime  TransactionTime;
+            public Type      ItemType;
+            public int       ItemQuantity;
+            public int       GoldPaid;
+        }
+
         private readonly Dictionary<Type, int> m_Table = new Dictionary<Type, int>();
-        private Type[] m_Types;
+        private Type[]     m_Types;
+        private List<Sale> m_SalesLog; // Note: Not serialized. But that's probably OK.
 
         public Type[] Types
         {
@@ -23,10 +35,35 @@ namespace Server.Mobiles
                 return m_Types;
             }
         }
+
+        /// Unsorted.
+        protected List<Sale> SalesLog
+        {
+            get
+            {
+                if (m_SalesLog == null)
+                    m_SalesLog = new List<Sale>();
+
+                return m_SalesLog;
+            }
+        }
+
         public void Add(Type type, int price)
         {
             m_Table[type] = price;
             m_Types = null;
+        }
+
+        public int GetBaseSellPriceFor(Type type)
+        {
+            int price = 0;
+            m_Table.TryGetValue(type, out price);
+            return price;
+        }
+
+        public int GetBaseSellPriceFor(Item item)
+        {
+            return GetBaseSellPriceFor(item.GetType());
         }
 
         public int GetSellPriceFor(Item item)
@@ -156,6 +193,112 @@ namespace Server.Mobiles
         public bool IsInList(Type type)
         {
             return m_Table.ContainsKey(type);
+        }
+
+        public bool IsItemWorthGoingIntoDebt(Item item, BaseVendor vendor)
+        {
+            int basePrice = GetBaseSellPriceFor(item);
+            int fullPrice = GetSellPriceFor(item, vendor);
+            return IsItemWorthGoingIntoDebt(item, basePrice, fullPrice);
+        }
+        
+        public static bool IsItemWorthGoingIntoDebt(
+            Item item,
+            int  basePrice,
+            int  fullPrice)
+        {
+            bool itemWorthGoingIntoDebt = false;
+            if ( basePrice != 0 )
+                itemWorthGoingIntoDebt =
+                    (fullPrice / basePrice > SplurgeRatioThreshold);
+
+            // Don't do anything special for player-manufactured items.
+            if (item is BaseArmor)
+            {
+                BaseArmor armor = (BaseArmor)item;
+
+                if (armor.Quality == ItemQuality.Low)
+                    itemWorthGoingIntoDebt = false;
+                else if (armor.Quality == ItemQuality.Exceptional)
+                    itemWorthGoingIntoDebt = false;
+            }
+            else if (item is BaseWeapon)
+            {
+                BaseWeapon weapon = (BaseWeapon)item;
+
+                if (weapon.Quality == ItemQuality.Low)
+                    itemWorthGoingIntoDebt = false;
+                else if (weapon.Quality == ItemQuality.Exceptional)
+                    itemWorthGoingIntoDebt = false;
+            }
+            
+            return itemWorthGoingIntoDebt;
+        }
+        
+        public int MaxPayForItem(
+            DateTime   transactionTime,
+            Item       item,
+            BaseVendor vendor)
+        {
+            bool worthIt = IsItemWorthGoingIntoDebt(item, vendor);
+            return MaxPayForItem(transactionTime, item, worthIt);
+        }
+
+        public int MaxPayForItem(
+            DateTime transactionTime,
+            Item     item,
+            bool     itemWorthGoingIntoDebt)
+        {
+            var intervalStart = transactionTime.AddDays(-1);
+            var itemType = item.GetType();
+
+            if ( m_SalesLog == null || m_SalesLog.Count == 0 )
+                return MaxSpendingOnEachItemPerDay;
+
+            if ( itemWorthGoingIntoDebt )
+                return Int32.MaxValue;
+
+            int amountSpent = 0;
+            int i = 0;
+            while (i < m_SalesLog.Count)
+            {
+                var sale = this.m_SalesLog[i];
+
+                // Remove outdated entries.
+                if ( sale.TransactionTime < intervalStart )
+                {
+                    // This is fast O(1) removal, but it does leave the
+                    // array unsorted. We're scanning it anyways, so
+                    // it shouldn't matter.
+                    sale = m_SalesLog[m_SalesLog.Count-1];
+                    m_SalesLog[i] = sale;
+                    m_SalesLog.RemoveAt(m_SalesLog.Count-1);
+                }
+
+                // Very important :p
+                i++;
+
+                // Skip irrelevant item entries.
+                if ( sale.ItemType != itemType )
+                    continue;
+
+                // Sum all gold paid.
+                amountSpent += sale.GoldPaid;
+            }
+
+            return Math.Max(0, MaxSpendingOnEachItemPerDay - amountSpent);
+        }
+
+        public void OnSold(DateTime transactionTime, Type itemType, int itemQty, int amountPaid)
+        {
+            var salesLog = this.SalesLog;
+
+            Sale s;
+            s.TransactionTime = transactionTime;
+            s.ItemType     = itemType;
+            s.ItemQuantity = itemQty;
+            s.GoldPaid     = amountPaid;
+            salesLog.Add(s);
         }
     }
 }
