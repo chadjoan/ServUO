@@ -481,9 +481,9 @@ namespace Server.SkillHandlers
                 }
             }
 
-            if (item is IImbuableEquipement)
+            if (item is IImbuableEquipment)
             {
-                IImbuableEquipement imbuable = (IImbuableEquipement)item;
+                IImbuableEquipment imbuable = (IImbuableEquipment)item;
 
                 imbuable.OnAfterImbued(from, id, value);
                 imbuable.TimesImbued++;
@@ -667,7 +667,7 @@ namespace Server.SkillHandlers
                 }
                 else if (prop is SAAbsorptionAttribute)
                 {
-                    clothing.SAAbsorptionAttributes[(SAAbsorptionAttribute)prop] = value;
+                    clothing.AbsorptionAttributes[(SAAbsorptionAttribute)prop] = value;
                 }
                 else if (prop is AosElementAttribute)
                 {
@@ -1182,7 +1182,7 @@ namespace Server.SkillHandlers
                     if (!ItemPropertyInfo.ValidateProperty(attr))
                         continue;
 
-                    if (clothing.SAAbsorptionAttributes[attr] > 0)
+                    if (clothing.AbsorptionAttributes[attr] > 0)
                     {
                         if (!(prop is SAAbsorptionAttribute) || ((SAAbsorptionAttribute)prop) != attr)
                             total++;
@@ -1441,9 +1441,9 @@ namespace Server.SkillHandlers
 
             // Special items base resist don't count as a property or weight. Once that resist is imbued, 
             // it then uses the base class resistance as the base resistance. EA is stupid.
-            if (item is IImbuableEquipement && IsSpecialImbuable(item))
+            if (item is IImbuableEquipment && IsSpecialImbuable(item))
             {
-                resists = ((IImbuableEquipement)item).BaseResists;
+                resists = ((IImbuableEquipment)item).BaseResists;
             }
             else
             {
@@ -1893,7 +1893,7 @@ namespace Server.SkillHandlers
                     return c.ClothingAttributes[(AosArmorAttribute)attr];
 
                 else if (attr is SAAbsorptionAttribute)
-                    return c.SAAbsorptionAttributes[(SAAbsorptionAttribute)attr];
+                    return c.AbsorptionAttributes[(SAAbsorptionAttribute)attr];
             }
             else if (item is BaseJewel)
             {
@@ -2083,9 +2083,9 @@ namespace Server.SkillHandlers
 
         public static int TimesImbued(Item item)
         {
-            if (item is IImbuableEquipement)
+            if (item is IImbuableEquipment)
             {
-                return ((IImbuableEquipement)item).TimesImbued;
+                return ((IImbuableEquipment)item).TimesImbued;
             }
 
             return 0;

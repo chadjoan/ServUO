@@ -441,7 +441,7 @@ namespace Server.Items
             Attributes.CastRecovery = 1;
             Attributes.WeaponDamage = 20;
 
-            SAAbsorptionAttributes.EaterPoison = 15;
+            AbsorptionAttributes.EaterPoison = 15;
             Resistances.Fire = 5;
         }
 
@@ -858,7 +858,7 @@ namespace Server.Items
         [Constructable]
         public TotemOfTheTribe() : base(0x2F5A)
         {
-            SAAbsorptionAttributes.EaterDamage = 5;
+            AbsorptionAttributes.EaterDamage = 5;
             Attributes.RegenHits = 2;
             Attributes.AttackChance = 5;
             Attributes.DefendChance = 5;

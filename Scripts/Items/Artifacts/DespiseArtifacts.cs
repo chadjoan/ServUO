@@ -47,12 +47,12 @@ namespace Server.Items
 
             switch (Utility.Random(6))
             {
-                case 0: SAAbsorptionAttributes.EaterKinetic = 2; break;
-                case 1: SAAbsorptionAttributes.EaterFire = 2; break;
-                case 2: SAAbsorptionAttributes.EaterCold = 2; break;
-                case 3: SAAbsorptionAttributes.EaterPoison = 2; break;
-                case 4: SAAbsorptionAttributes.EaterEnergy = 2; break;
-                case 5: SAAbsorptionAttributes.EaterDamage = 2; break;
+                case 0: AbsorptionAttributes.EaterKinetic = 2; break;
+                case 1: AbsorptionAttributes.EaterFire = 2; break;
+                case 2: AbsorptionAttributes.EaterCold = 2; break;
+                case 3: AbsorptionAttributes.EaterPoison = 2; break;
+                case 4: AbsorptionAttributes.EaterEnergy = 2; break;
+                case 5: AbsorptionAttributes.EaterDamage = 2; break;
             }
 
             Attributes.NightSight = 1;
@@ -87,12 +87,12 @@ namespace Server.Items
 
             switch (Utility.Random(6))
             {
-                case 0: SAAbsorptionAttributes.EaterKinetic = 2; break;
-                case 1: SAAbsorptionAttributes.EaterFire = 2; break;
-                case 2: SAAbsorptionAttributes.EaterCold = 2; break;
-                case 3: SAAbsorptionAttributes.EaterPoison = 2; break;
-                case 4: SAAbsorptionAttributes.EaterEnergy = 2; break;
-                case 5: SAAbsorptionAttributes.EaterDamage = 2; break;
+                case 0: AbsorptionAttributes.EaterKinetic = 2; break;
+                case 1: AbsorptionAttributes.EaterFire = 2; break;
+                case 2: AbsorptionAttributes.EaterCold = 2; break;
+                case 3: AbsorptionAttributes.EaterPoison = 2; break;
+                case 4: AbsorptionAttributes.EaterEnergy = 2; break;
+                case 5: AbsorptionAttributes.EaterDamage = 2; break;
             }
 
             Attributes.NightSight = 1;

@@ -2758,17 +2758,19 @@ namespace Server.Items
 
         public static SAAbsorptionAttributes GetSAAbsorptionAttributes(Item item)
         {
-            if (item is BaseArmor)
-                return ((BaseArmor)item).AbsorptionAttributes;
-
-            else if (item is BaseJewel)
-                return ((BaseJewel)item).AbsorptionAttributes;
-
-            else if (item is BaseWeapon)
-                return ((BaseWeapon)item).AbsorptionAttributes;
-
-            else if (item is BaseClothing)
-                return ((BaseClothing)item).SAAbsorptionAttributes;
+            // This was originally a bunch of "if ( item is ... )"
+            // but was changed over to use the IItemWithSAAbsorptionAttributes
+            // interface. The BaseTalisman was missing from the original
+            // list, so it is excluded here as well. Still, I am not sure if
+            // that was what the original author intended, or if this code
+            // was supposed to comprehensively capture ALL items with
+            // SA Absorption attributes.
+            if (item is IItemWithSAAbsorptionAttributes
+            && !(item is BaseTalisman))
+            {
+                var saItem = item as IItemWithSAAbsorptionAttributes;
+                return saItem.AbsorptionAttributes;
+            }
 
             return null;
         }

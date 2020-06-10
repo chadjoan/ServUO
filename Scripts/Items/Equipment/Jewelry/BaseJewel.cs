@@ -19,7 +19,10 @@ namespace Server.Items
         Diamond
     }
 
-    public abstract class BaseJewel : Item, ICraftable, ISetItem, IWearableDurability, IResource, IVvVItem, IOwnerRestricted, ITalismanProtection, IArtifact, ICombatEquipment, IQuality
+    public abstract class BaseJewel : Item, ICraftable, ISetItem, IWearableDurability,
+        IResource, IVvVItem, IOwnerRestricted, ITalismanProtection, IArtifact, ICombatEquipment, IQuality,
+        IItemWithAosAttributes, IItemWithAosElementalResistance,
+        IItemWithNegativeAttributes, IItemWithSAAbsorptionAttributes
     {
         private int m_MaxHitPoints;
         private int m_HitPoints;

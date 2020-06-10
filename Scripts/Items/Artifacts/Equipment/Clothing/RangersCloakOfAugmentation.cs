@@ -12,7 +12,7 @@ namespace Server.Items
         public RangersCloakOfAugmentation()
         {
             Hue = 0x54A;
-            SAAbsorptionAttributes.EaterKinetic = 5;
+            AbsorptionAttributes.EaterKinetic = 5;
             Attributes.SpellDamage = 3;
             Attributes.LowerManaCost = 1;
             Attributes.WeaponSpeed = 5;

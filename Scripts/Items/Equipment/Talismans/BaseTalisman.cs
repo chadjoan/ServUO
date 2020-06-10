@@ -35,7 +35,9 @@ namespace Server.Items
         Tinkering
     }
 
-    public class BaseTalisman : Item, IWearableDurability, IVvVItem, IOwnerRestricted, ITalismanProtection, ITalismanKiller, IArtifact
+    public class BaseTalisman : Item, IWearableDurability, IVvVItem, IOwnerRestricted,
+        ITalismanProtection, ITalismanKiller, IArtifact,
+        IItemWithAosAttributes, IItemWithNegativeAttributes, IItemWithSAAbsorptionAttributes
     {
         private bool _VvVItem;
         private Mobile _Owner;
@@ -422,7 +424,7 @@ namespace Server.Items
         private SAAbsorptionAttributes m_SAAbsorptionAttributes;
 
         [CommandProperty(AccessLevel.GameMaster)]
-        public SAAbsorptionAttributes SAAbsorptionAttributes
+        public SAAbsorptionAttributes AbsorptionAttributes
         {
             get
             {

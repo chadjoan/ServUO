@@ -25,7 +25,11 @@ namespace Server.Items
         SlayerName Slayer2 { get; set; }
     }
 
-    public abstract class BaseWeapon : Item, IWeapon, IUsesRemaining, ICraftable, ISlayer, IDurability, ISetItem, IVvVItem, IOwnerRestricted, IResource, IArtifact, ICombatEquipment, IEngravable, IQuality
+    public abstract class BaseWeapon : Item, IWeapon, IUsesRemaining, ICraftable,
+        ISlayer, IDurability, ISetItem, IVvVItem, IOwnerRestricted, IResource,
+        IArtifact, ICombatEquipment, IEngravable, IQuality,
+        IItemWithAosAttributes, IItemWithAosElementalDamage,
+        IItemWithNegativeAttributes, IItemWithSAAbsorptionAttributes
     {
         private string m_EngravedText;
 

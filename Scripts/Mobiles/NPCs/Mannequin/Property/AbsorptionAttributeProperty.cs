@@ -9,25 +9,18 @@ namespace Server.Mobiles.MannequinProperty
 
         public double GetPropertyValue(Item item)
         {
-            if (item is BaseArmor)
+            // This was originally a bunch of "if ( item is ... )"
+            // but was changed over to use the IItemWithSAAbsorptionAttributes
+            // interface. The BaseTalisman was missing from the original
+            // list, so it is excluded here as well. Still, I am not sure if
+            // that was what the original author intended, or if this code
+            // was supposed to comprehensively capture ALL items with
+            // SA Absorption attributes.
+            if (item is IItemWithSAAbsorptionAttributes
+            && !(item is BaseTalisman))
             {
-                return ((BaseArmor)item).AbsorptionAttributes[Attribute];
-            }
-
-            if (item is BaseJewel)
-            {
-                return ((BaseJewel)item).AbsorptionAttributes[Attribute];
-            }
-
-
-            if (item is BaseWeapon)
-            {
-                return ((BaseWeapon)item).AbsorptionAttributes[Attribute];
-            }
-
-            if (item is BaseClothing)
-            {
-                return ((BaseClothing)item).SAAbsorptionAttributes[Attribute];
+                var saItem = item as IItemWithSAAbsorptionAttributes;
+                return saItem.AbsorptionAttributes[Attribute];
             }
 
             return 0;

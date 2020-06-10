@@ -20,7 +20,7 @@ namespace Server.Items
             Attributes.BonusInt = 8;
             Attributes.BonusMana = 8;
             Attributes.RegenMana = 1;
-            SAAbsorptionAttributes.CastingFocus = 3;
+            AbsorptionAttributes.CastingFocus = 3;
             Attributes.SpellDamage = 5;
         }
 

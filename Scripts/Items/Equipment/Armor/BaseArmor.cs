@@ -9,7 +9,8 @@ using AMT = Server.Items.ArmorMaterialType;
 
 namespace Server.Items
 {
-    public abstract class BaseArmor : Item, IScissorable, ICraftable, IWearableDurability, IResource, ISetItem, IVvVItem, IOwnerRestricted, ITalismanProtection, IEngravable, IArtifact, ICombatEquipment, IQuality
+    public abstract class BaseArmor : Item, IScissorable, ICraftable, IWearableDurability, IResource, ISetItem, IVvVItem, IOwnerRestricted, ITalismanProtection, IEngravable, IArtifact, ICombatEquipment, IQuality,
+    IItemWithAosAttributes, IItemWithNegativeAttributes, IItemWithSAAbsorptionAttributes
     {
         private string _EngravedText;
 

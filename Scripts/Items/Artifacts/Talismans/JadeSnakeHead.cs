@@ -12,7 +12,7 @@
         {
             Hue = 0x48A;
             Weight = 1.0;
-            SAAbsorptionAttributes.EaterPoison = 5;
+            AbsorptionAttributes.EaterPoison = 5;
             Attributes.RegenStam = 2;
             Attributes.LowerManaCost = 5;
         }

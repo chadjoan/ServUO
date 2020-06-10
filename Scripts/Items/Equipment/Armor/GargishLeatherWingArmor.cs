@@ -4,7 +4,7 @@ using System;
 namespace Server.Items
 {
     [FlipableAttribute(0x457E, 0x457F)]
-    public class GargishLeatherWingArmor : BaseArmor, IRangeDamage
+    public class GargishLeatherWingArmor : BaseArmor, IRangeDamage, IItemWithAosElementalDamage
     {
         private AosElementAttributes m_AosElementDamages;
 

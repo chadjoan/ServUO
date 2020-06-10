@@ -14,7 +14,11 @@ namespace Server.Items
         int TempHue { get; set; }
     }
 
-    public abstract class BaseClothing : Item, IDyable, IScissorable, ICraftable, IWearableDurability, IResource, ISetItem, IVvVItem, IOwnerRestricted, IArtifact, ICombatEquipment, IEngravable, IQuality
+    public abstract class BaseClothing : Item, IDyable, IScissorable, ICraftable,
+        IWearableDurability, IResource, ISetItem, IVvVItem, IOwnerRestricted, IArtifact,
+        ICombatEquipment, IEngravable, IQuality,
+        IItemWithAosAttributes, IItemWithAosElementalResistance,
+        IItemWithNegativeAttributes, IItemWithSAAbsorptionAttributes
     {
         private string m_EngravedText;
 
@@ -337,7 +341,7 @@ namespace Server.Items
         public AosElementAttributes Resistances { get { return m_AosResistances; } set { } }
 
         [CommandProperty(AccessLevel.GameMaster)]
-        public SAAbsorptionAttributes SAAbsorptionAttributes { get { return m_SAAbsorptionAttributes; } set { } }
+        public SAAbsorptionAttributes AbsorptionAttributes { get { return m_SAAbsorptionAttributes; } set { } }
 
         [CommandProperty(AccessLevel.GameMaster)]
         public NegativeAttributes NegativeAttributes { get { return m_NegativeAttributes; } set { } }

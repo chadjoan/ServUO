@@ -1214,7 +1214,7 @@ namespace Server.Items
                             return (item is BaseArmor || item is BaseJewel || item is BaseWeapon) && !HasEater(item);
                         case 500:
                         case 501: // Self Repair cannot be added to items with brittle/antique/no repair or items that have been imbued
-                            if (item is IImbuableEquipement && ((IImbuableEquipement)item).TimesImbued > 0)
+                            if (item is IImbuableEquipment && ((IImbuableEquipment)item).TimesImbued > 0)
                             {
                                 return false;
                             }

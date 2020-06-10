@@ -6,7 +6,8 @@ using System.Collections.Generic;
 
 namespace Server.Items
 {
-    public class FishingPole : Item, ICraftable, IUsesRemaining, IResource, IQuality
+    public class FishingPole : Item, ICraftable, IUsesRemaining, IResource, IQuality,
+        IItemWithAosAttributes
     {
         private Type m_BaitType;
         private bool m_EnhancedBait;

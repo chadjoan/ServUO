@@ -24,7 +24,7 @@ namespace Server.Items
             Attributes.BonusMana = 5;
             Attributes.RegenMana = 2;
             Attributes.SpellDamage = 5;
-            SAAbsorptionAttributes.CastingFocus = 2;
+            AbsorptionAttributes.CastingFocus = 2;
             Attributes.LowerManaCost = 8;
             Attributes.LowerRegCost = 10;
         }

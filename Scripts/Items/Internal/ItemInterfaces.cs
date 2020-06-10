@@ -3,6 +3,42 @@ using Server.Mobiles;
 
 namespace Server.Items
 {
+    public interface IItemWithAosAttributes
+    {
+        // Note: This does not include weapon and armor attributes, but those
+        // are pretty specific, so you should be able to just use something like
+        // "if (item is BaseWeapon)
+        //  {
+        //      var weapon = item as BaseWeapon;
+        //      var attrs = weapon.WeaponAttributes;
+        //      ...
+        //  }"
+        // ... to pull those.
+
+        AosAttributes   Attributes   { get; }
+        AosSkillBonuses SkillBonuses { get; }
+    }
+    
+    public interface IItemWithAosElementalDamage
+    {
+        AosElementAttributes AosElementDamages { get; }
+    }
+    
+    public interface IItemWithAosElementalResistance
+    {
+        AosElementAttributes Resistances { get; }
+    }
+    
+    public interface IItemWithNegativeAttributes
+    {
+        NegativeAttributes NegativeAttributes { get; }
+    }
+
+    public interface IItemWithSAAbsorptionAttributes
+    {
+        SAAbsorptionAttributes AbsorptionAttributes { get; }
+    }
+
     public interface IUsesRemaining
     {
         int UsesRemaining { get; set; }
@@ -41,7 +77,7 @@ namespace Server.Items
         bool CanBeSeenBy(PlayerMobile m);
     }
 
-    public interface IImbuableEquipement
+    public interface IImbuableEquipment
     {
         int TimesImbued { get; set; }
         bool IsImbued { get; set; }
@@ -50,7 +86,7 @@ namespace Server.Items
         void OnAfterImbued(Mobile m, int mod, int value);
     }
 
-    public interface ICombatEquipment : IImbuableEquipement
+    public interface ICombatEquipment : IImbuableEquipment
     {
         ItemPower ItemPower { get; set; }
         ReforgedPrefix ReforgedPrefix { get; set; }
