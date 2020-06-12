@@ -1,6 +1,7 @@
 #region References
 using Server.Commands;
 using Server.Engines.Craft;
+using Server.Mobiles;
 using Server.Multis;
 using Server.Network;
 using Server.Spells;
@@ -111,6 +112,16 @@ namespace Server.Items
         public Spellbook(Serial serial)
             : base(serial)
         { }
+
+        [CommandProperty(AccessLevel.GameMaster)]
+        public string SellPrice
+        {
+            get
+            {
+                var si = new GenericSellInfo();
+                return si.GetItemSellPriceFormulaString(this);
+            }
+        }
 
         [CommandProperty(AccessLevel.GameMaster)]
         public string EngravedText

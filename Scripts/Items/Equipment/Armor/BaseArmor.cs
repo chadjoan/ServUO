@@ -1,5 +1,6 @@
 using Server.ContextMenus;
 using Server.Engines.Craft;
+using Server.Mobiles;
 using Server.Network;
 using System;
 using System.Collections.Generic;
@@ -39,6 +40,16 @@ namespace Server.Items
         {
             get { return _OwnerName; }
             set { _OwnerName = value; InvalidateProperties(); }
+        }
+
+        [CommandProperty(AccessLevel.GameMaster)]
+        public string SellPrice
+        {
+            get
+            {
+                var si = new GenericSellInfo();
+                return si.GetItemSellPriceFormulaString(this);
+            }
         }
 
         /* Armor internals work differently now (Jun 19 2003)

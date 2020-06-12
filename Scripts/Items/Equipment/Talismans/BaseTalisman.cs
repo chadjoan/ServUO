@@ -63,6 +63,16 @@ namespace Server.Items
             set { _OwnerName = value; InvalidateProperties(); }
         }
 
+        [CommandProperty(AccessLevel.GameMaster)]
+        public string SellPrice
+        {
+            get
+            {
+                var si = new GenericSellInfo();
+                return si.GetItemSellPriceFormulaString(this);
+            }
+        }
+
         public static void Initialize()
         {
             CommandSystem.Register("RandomTalisman", AccessLevel.GameMaster, RandomTalisman_OnCommand);
