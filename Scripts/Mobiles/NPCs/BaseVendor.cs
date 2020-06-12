@@ -2955,7 +2955,7 @@ namespace Server.ContextMenus
         public  Mobile    OtherParty;
         public  int       RunningBalance;
 
-        public string ToString()
+        public override string ToString()
         {
             return String.Format(
                 "{{TransactionTime: {0:yyyy-MM-dd.HH:mm:ss}, TransactionAmount: {1}, OtherParty: {2}, RunningBalance: {3}}}",
