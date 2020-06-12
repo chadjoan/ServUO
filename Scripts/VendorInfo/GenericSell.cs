@@ -1186,6 +1186,23 @@ namespace Server.Mobiles
             return priceAsInt;
         }
 
+        public string GetItemSellPriceFormulaString(Item item)
+        {
+                // (b*m0 + k)*m1 = b*m0*m1 + k*m1
+                // (By distributive property of multiplication.)
+                // This gives us a way to write the pricing formula
+                // that more immediately represents what a player is
+                // likely to see when they try to sell that item.
+                // A BaseVendor object would be necessary to calculate
+                // the "BaseSellPrice" part of this, but we don't have
+                // that if we are inspecting an item in isolation, so
+                // this ends up being an estimate, but hopefully a helpful one.
+                PricingCoefficients c = this.GetPricingCoefficients(item);
+                return String.Format("(BaseSellPrice * {0}) + {1}",
+                    c.PreMultiplier * c.PostMultiplier,
+                    c.FlatBonus * c.PostMultiplier);
+        }
+
         public int GetBuyPriceFor(Item item)
         {
             return GetBuyPriceFor(item, null);
