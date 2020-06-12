@@ -3048,7 +3048,7 @@ namespace Server.ContextMenus
                 // Use ReverseFindEntryBeforeTime to wind back time until
                 // the next ledger entry that's before 'when'.
                 // This is more appropriate than forward-find because
-                // this method is more likely to be called 
+                // this method is more likely to be called
                 int ledgerIdx = ReverseFindEntryBeforeTime(m_Ledger, when);
                 if ( ledgerIdx >= 0 )
                     return m_Ledger[ledgerIdx].RunningBalance;
@@ -3128,7 +3128,7 @@ namespace Server.ContextMenus
                 var nextSimStartingCash = this.GetCashOnHand(nextSimStartTime, false);
 
                 // Only start idle-counting when the vendor reaches their target cash-on-hand.
-                if ( TargetCashOnHandLow <= nextSimStartingCash 
+                if ( TargetCashOnHandLow <= nextSimStartingCash
                 &&       nextSimStartingCash < TargetCashOnHandHigh )
                 {
                     // Count idle days.
@@ -3272,7 +3272,7 @@ namespace Server.ContextMenus
             // All entries are past/after 'theTime', so return -1.
             return -1;
         }
-        
+
         /// This method merges all of the simulation ledger entries into the
         /// vendor's proper ledger (m_Ledger).
         ///
@@ -3552,13 +3552,13 @@ namespace Server.ContextMenus
 
             return newStartingBalance;
         }
-        
+
         private static int GetLineNumber()
         {
             StackFrame callStack = new StackFrame(1, true);
             return callStack.GetFileLineNumber();
         }
-        
+
         public void AddTransaction(
             DateTime transactionTime,
             int      transactionAmount, // Positive if the vendor made money, negative for loss.
@@ -3672,7 +3672,7 @@ namespace Server.ContextMenus
 
                 // Scale it to the min/max range.
                 randRangeInSeconds *= (60*60*24)*MaxDaysBeforeMaxCashReset;
-                
+
                 // This should place m_NextMaxCashReset within 'MaxDaysBeforeMaxCashReset'
                 // days of the transaction time.
                 randRangeInSeconds = -randRangeInSeconds; // Actually subtract seconds.
@@ -3787,7 +3787,7 @@ namespace Server.ContextMenus
                 case 'x': return '\x02e3';
                 case 'y': return '\x02b8';
                 case 'z': return '\x1dbb';
-                
+
                 // Capital letters.
                 // Mapped to lowercase when upper is not available.
                 // (see default case)
@@ -3866,7 +3866,7 @@ namespace Server.ContextMenus
                 case 'u': return '\x1d64';
                 case 'v': return '\x1d65';
                 case 'x': return '\x2093';
-                
+
                 // Unicode does not support uppercase subscripts. Too bad, so sad.
                 // We will substitute these for lowercase subscripts whenever
                 // it allows the character to print as subscript.
@@ -3929,7 +3929,7 @@ namespace Server.ContextMenus
         {
             var pages = new List<BookPageInfo>();
             string[] lines;
-            
+
             // Header page.
             lines = new string[8];
             lines[0] = "== Ledger Header ==";
@@ -4015,7 +4015,7 @@ namespace Server.ContextMenus
             lines[7] = "\x2002\x2002\x2002\x2002|";
             lines[8] = ToSuperscript("2002");
             pages.Add(new BookPageInfo(lines));
-            
+
             lines = new string[9];
             lines[0] = "Unicode spaces 2";
             lines[1] = "\x2003\x2003\x2003\x2003|";
@@ -4027,7 +4027,7 @@ namespace Server.ContextMenus
             lines[7] = "\x2006\x2006\x2006\x2006|";
             lines[8] = ToSuperscript("2006");
             pages.Add(new BookPageInfo(lines));
-            
+
             lines = new string[9];
             lines[0] = "Unicode spaces 3";
             lines[1] = "\x2007\x2007\x2007\x2007|";
@@ -4039,7 +4039,7 @@ namespace Server.ContextMenus
             lines[7] = "\x200A\x200A\x200A\x200A|";
             lines[8] = ToSuperscript("200a");
             pages.Add(new BookPageInfo(lines));
-            
+
             lines = new string[7];
             lines[0] = "Unicode spaces 4";
             lines[1] = "\x202F\x202F\x202F\x202F|";
@@ -4241,7 +4241,7 @@ namespace Server.ContextMenus
                 for ( int i = 0; i < numTransactions; i++ )
                 {
                     LedgerEntry e;
-                    e.TransactionTime = 
+                    e.TransactionTime =
                         startTime.AddSeconds(
                             Math.Round(
                                 transTimeWeights[i] * intervalSpanInSeconds
@@ -4255,14 +4255,14 @@ namespace Server.ContextMenus
                     // null might cause crashing. That's bad.
                     // Instead, we'll just have the vendor play with itself.
                     e.OtherParty = vendor;
-                    
+
                     // Note that we cannot yet calculate running balance,
                     // because the ledger list might not be sorted.
                     e.RunningBalance = 0;
 
                     this.m_Ledger.Add(e);
                 }
-                
+
                 // Sort the ledger by date.
                 // We will expect all ledgers to be date-sorted.
                 // In this case, it helps us compute the running balance.
@@ -4312,7 +4312,7 @@ namespace Server.ContextMenus
             {
                 var pages = new List<BookPageInfo>();
                 string[] lines;
-                
+
                 // Header page.
                 lines = new string[8];
                 lines[0] = "== Cash Sim. ==";
@@ -4384,12 +4384,12 @@ namespace Server.ContextMenus
         public void Deserialize(GenericReader reader, BaseVendor vendor)
         {
             int version = reader.ReadInt();
-            
+
             switch(version)
             {
                 case 1:
                     m_StartingBalance = reader.ReadInt();
-                
+
                     int ledgerCount = reader.ReadInt();
                     if ( ledgerCount > 0 )
                     {
