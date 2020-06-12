@@ -252,11 +252,11 @@ namespace Server.Mobiles
             var intervalStart = transactionTime.AddDays(-1);
             var itemType = item.GetType();
 
-            if ( m_SalesLog == null || m_SalesLog.Count == 0 )
-                return MaxSpendingOnEachItemPerDay;
-
             if ( itemWorthGoingIntoDebt )
                 return Int32.MaxValue;
+
+            if ( m_SalesLog == null || m_SalesLog.Count == 0 )
+                return MaxSpendingOnEachItemPerDay;
 
             int amountSpent = 0;
             int i = 0;

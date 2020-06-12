@@ -1112,6 +1112,11 @@ namespace Server.Mobiles
                 return;
             }
 
+            DateTime transactionTime = DateTime.UtcNow;
+            int  cashOnHand = this.Ledger.GetCashOnHand(transactionTime);
+            int  numSellableItems = 0;
+            int  numAffordableItems = 0;
+
             Container pack = from.Backpack;
 
             if (pack != null)
@@ -1133,13 +1138,25 @@ namespace Server.Mobiles
 
                         if (item.IsStandardLoot() && item.Movable && ssi.IsSellable(item))
                         {
-                            DateTime transactionTime = DateTime.UtcNow;
-                            int priceEach = ssi.GetSellPriceFor(item, this);
-                            int maxSaleGold = ssi.MaxPayForItem(transactionTime, item, this);
-                            if ( priceEach > maxSaleGold )
+                            numSellableItems++;
+
+                            int basePriceEach = ssi.GetBaseSellPriceFor(item);
+                            int fullPriceEach = ssi.GetSellPriceFor(item, this);
+
+                            bool worthIt =
+                                GenericSellInfo.IsItemWorthGoingIntoDebt(
+                                    item, basePriceEach, fullPriceEach);
+
+                            int maxSaleGold = ssi.MaxPayForItem(transactionTime, item, worthIt);
+                            if ( fullPriceEach > maxSaleGold )
                                 continue; // Vendor can't afford ANY of this item. So don't offer to buy it.
 
-                            table[item] = new SellItemState(item, priceEach, ssi.GetNameFor(item));
+                            if ( fullPriceEach > cashOnHand
+                            && !(worthIt && fullPriceEach/10 < cashOnHand) )
+                                continue; // Vendor can't afford ANY of this item. So don't offer to buy it.
+
+                            numAffordableItems++;
+                            table[item] = new SellItemState(item, fullPriceEach, ssi.GetNameFor(item));
                         }
                     }
                 }
@@ -1149,6 +1166,10 @@ namespace Server.Mobiles
                     SendPacksTo(from);
 
                     from.Send(new VendorSellList(this, table.Values));
+                }
+                else if ( numSellableItems > 0 && numAffordableItems == 0 )
+                {
+                    Say(true, "I can't afford anything you have.");
                 }
                 else
                 {
@@ -1266,7 +1287,7 @@ namespace Server.Mobiles
                             break;
                     }
 
-                    // On EA, you have to choose the reward before you get the gold/fame reward.  IF you right click the gump, you lose 
+                    // On EA, you have to choose the reward before you get the gold/fame reward.  IF you right click the gump, you lose
                     // the gold/fame for that bod.
 
                     Banker.Deposit(from, gold, true);
@@ -1806,7 +1827,7 @@ namespace Server.Mobiles
 
             if (!bought)
             {
-                // ? Begging thy pardon, but thy bank account lacks these funds. 
+                // ? Begging thy pardon, but thy bank account lacks these funds.
                 // : Begging thy pardon, but thou casnt afford that.
                 SayTo(buyer, totalCost >= 2000 ? 500191 : 500192, 0x3B2);
 
@@ -2095,38 +2116,46 @@ namespace Server.Mobiles
         [CommandProperty(AccessLevel.GameMaster)]
         public bool DumpLedger
         {
-            get { return false; }
+            get
+            {
+                DumpLedgerImpl();
+                return false;
+            }
+
             set
             {
                 if (value)
-                {
-                    List<BookPageInfo> pages =
-                        this.Ledger.ToBookPages();
-
-                    BaseBook theLedger;
-                    var rng = new Random();
-                    var pageCount = pages.Count;
-                    var writable = true;
-                    switch(rng.Next(0,4))
-                    {
-                        case 0: theLedger = new TanBook(pageCount, writable);   break;
-                        case 1: theLedger = new RedBook(pageCount, writable);   break;
-                        case 2: theLedger = new BlueBook(pageCount, writable);  break;
-                        case 3: theLedger = new BrownBook(pageCount, writable); break;
-                        default: return;
-                    }
-                    theLedger.Title  = "Cash Account Ledger";
-                    theLedger.Author = this.Name;
-                    for ( int i = 0; i < pageCount; i++ )
-                        theLedger.Pages[i] = pages[i];
-
-                    var tmpItem = this.Holding;
-                    this.Holding = theLedger;
-                    this.Drop(this.Location);
-                    this.Holding = tmpItem;
-                    Say("I have written my ledger into a book and placed it on the floor.");
-                }
+                    DumpLedgerImpl();
             }
+        }
+
+        private void DumpLedgerImpl()
+        {
+            List<BookPageInfo> pages =
+                this.Ledger.ToBookPages();
+
+            BaseBook theLedger;
+            var rng = new Random();
+            var pageCount = pages.Count;
+            var writable = true;
+            switch(rng.Next(0,4))
+            {
+                case 0: theLedger = new TanBook(pageCount, writable);   break;
+                case 1: theLedger = new RedBook(pageCount, writable);   break;
+                case 2: theLedger = new BlueBook(pageCount, writable);  break;
+                case 3: theLedger = new BrownBook(pageCount, writable); break;
+                default: return;
+            }
+            theLedger.Title  = "Cash Account Ledger";
+            theLedger.Author = this.Name;
+            for ( int i = 0; i < pageCount; i++ )
+                theLedger.Pages[i] = pages[i];
+
+            var tmpItem = this.Holding;
+            this.Holding = theLedger;
+            this.Drop(this.Location);
+            this.Holding = tmpItem;
+            Say("I have written my ledger into a book and placed it on the floor.");
         }
 
         /*
@@ -2136,7 +2165,7 @@ namespace Server.Mobiles
             return lineNumber;
         }
         */
-        
+
         private static int GetLineNumber()
         {
             StackFrame callStack = new StackFrame(1, true);
@@ -2267,7 +2296,7 @@ namespace Server.Mobiles
                         // buy this item (or maybe just part of a stack).
                         int basePrice = ssi.GetBaseSellPriceFor(resp.Item);
                         int fullPrice = singlePrice;
-                        
+
                         bool itemWorthGoingIntoDebt =
                             GenericSellInfo.IsItemWorthGoingIntoDebt(
                                 resp.Item, basePrice, fullPrice);
@@ -2941,27 +2970,27 @@ namespace Server.ContextMenus
         // Cash-on-hand parameters. All cash is measured in gold coins.
         public static int TargetCashOnHandLow   = Config.Get("Vendors.TargetCashOnHandLow", 8000);
         public static int TargetCashOnHandHigh  = Config.Get("Vendors.TargetCashOnHandHigh", 24000);
-        
+
         public static int MaxDailyCashInflow    = Config.Get("Vendors.MaxDailyCashInflow", 4800);
         public static int MaxDailyCashOutflow   = Config.Get("Vendors.MaxDailyCashOutflow", 2400);
-        
+
         public static int HoursSpreadOnCashDays = Config.Get("Vendors.HoursSpreadOnCashDays", 2);
-        
+
         public static int MaxCashOnHandLow      = Config.Get("Vendors.MaxCashOnHandLow", 40000);
         public static int MaxCashOnHandHigh     = Config.Get("Vendors.MaxCashOnHandHigh", 60000);
-        
+
         public static int MinDaysBeforeMaxCashReset = Config.Get("Vendors.MinDaysBeforeMaxCashReset", 7);
         public static int MaxDaysBeforeMaxCashReset = Config.Get("Vendors.MaxDaysBeforeMaxCashReset", 14);
 
         public const  int NumDaysCashSimBeforeDormancy = 3;
         public const  int NumSimulatedCashTransacts = 7;
-        
+
         // Useful for avoiding this calculation during construction/deserialization
         // of instances that don't already have it.
         private static  DateTime  serverStartTime = DateTime.UtcNow;
 
         // Cash-on-hand working values.
-        
+
         // The transactions that this vendor has made. This includes all
         // buys/sells with players, as well as simulated "transactions" that
         // keep the vendor's assets from deflating too hard or inflating
