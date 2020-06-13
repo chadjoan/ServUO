@@ -1838,8 +1838,10 @@ namespace Server.Mobiles
             // If there is a maximum on the amount of cash-on-hand they can
             // hold, then the ledger's transaction logic will handle that.
             if (bought && totalCost != 0)
+            {
                 this.Ledger.AddTransaction(
                     transactionTime, (int)Math.Round(totalCost), buyer);
+            }
 
             buyer.PlaySound(0x32);
 
@@ -3046,7 +3048,7 @@ namespace Server.ContextMenus
             if ( m_Ledger.Count > 0 )
             {
                 // Use ReverseFindEntryBeforeTime to wind back time until
-                // the next ledger entry that's before 'when'.
+                // the next ledger entry that's before (or at) 'when'.
                 // This is more appropriate than forward-find because
                 // this method is more likely to be called
                 int ledgerIdx = ReverseFindEntryBeforeTime(m_Ledger, when);
@@ -3265,7 +3267,18 @@ namespace Server.ContextMenus
             {
                 i--;
                 LedgerEntry e = ledger[i];
-                if ( e.TransactionTime < theTime )
+                
+                // Note: It is important that this select coincident entries
+                // (e.g. use '<=' instead of '<'), because simultaneity DOES
+                // happen (ex: when the ledger needs to spontaneously adjust
+                // for exceeding m_CurrentMaxCash), and if we fail to include
+                // coincident entries, it will prevent GetCashOnHand from
+                // updating (and thus returning different values) in-between
+                // calculations on simultaneous entries. Thus a caller might
+                // add entries but never see GetCashOnHand return an updated
+                // value. That, in turn, can cause infinite loops and
+                // infinite recursion.
+                if ( e.TransactionTime <= theTime )
                     return i;
             }
 
@@ -3327,9 +3340,9 @@ namespace Server.ContextMenus
             int                    startingBalance)
         {
             // Start at the most-future 'from' transaction and move backwards
-            // until we hit an entry that's before 'upTo'. This might happen
-            // immediately. Regardless, this will give us an upper-bound for
-            // the amount of entries that could be added to the vendor's
+            // until we hit an entry that's before (or at) 'upTo'. This might
+            // happen immediately. Regardless, this will give us an upper-bound
+            // for the amount of entries that could be added to the vendor's
             // own ledger.
             int mostRecentFromLedgerIdx =
                 ReverseFindEntryBeforeTime(fromLedger, upTo);
@@ -3618,7 +3631,7 @@ namespace Server.ContextMenus
             {
                 i--;
                 prev = ledger[i+0];
-                if ( prev.TransactionTime < e.TransactionTime )
+                if ( prev.TransactionTime <= e.TransactionTime )
                     break; // Sorted.
 
                 // Swap.
